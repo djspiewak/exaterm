@@ -47,6 +47,7 @@ struct SessionObservation {
     active_command: Option<String>,
     dominant_process: Option<String>,
     recent_files: Vec<String>,
+    recent_file_activity: BTreeMap<String, Instant>,
     work_output_excerpt: Option<String>,
     file_fingerprints: BTreeMap<PathBuf, (u64, u64)>,
 }
@@ -60,6 +61,7 @@ impl SessionObservation {
             active_command: None,
             dominant_process: None,
             recent_files: Vec::new(),
+            recent_file_activity: BTreeMap::new(),
             work_output_excerpt: None,
             file_fingerprints: BTreeMap::new(),
         }
@@ -610,6 +612,7 @@ fn spawn_summary_worker() -> Option<SummaryWorker> {
 
 fn refresh_runtime_and_cards(context: &Rc<AppContext>) {
     drain_summary_results(context);
+    update_flowbox_columns(context);
     let sessions = context.state.borrow().sessions().to_vec();
     for session in &sessions {
         refresh_observation(context, session);
@@ -684,12 +687,30 @@ fn refresh_observation(context: &Rc<AppContext>, session: &crate::model::Session
     observation.active_command =
         observation.dominant_process.clone().or_else(|| launch_command_hint(&session.launch));
     observation.work_output_excerpt = output_excerpt;
-    observation.recent_files = session
+    let changed_files = session
         .launch
         .cwd
         .as_deref()
         .map(|cwd| scan_recent_files(cwd, &mut observation.file_fingerprints))
         .unwrap_or_default();
+    let now = Instant::now();
+    for file in changed_files {
+        observation.recent_file_activity.insert(file, now);
+    }
+    observation
+        .recent_file_activity
+        .retain(|_, seen_at| seen_at.elapsed() <= Duration::from_secs(12));
+    let mut recent_files = observation
+        .recent_file_activity
+        .iter()
+        .map(|(path, seen_at)| (path.clone(), *seen_at))
+        .collect::<Vec<_>>();
+    recent_files.sort_by_key(|(_, seen_at)| std::cmp::Reverse(*seen_at));
+    observation.recent_files = recent_files
+        .into_iter()
+        .map(|(path, _)| path)
+        .take(2)
+        .collect();
 }
 
 fn update_battle_card_widgets(context: &Rc<AppContext>, session: &crate::model::SessionRecord) {
@@ -1024,14 +1045,33 @@ fn refresh_focus_panel(context: &Rc<AppContext>) {
 
 fn update_flowbox_columns(context: &Rc<AppContext>) {
     let total = context.session_cards.borrow().len();
-    let columns = if context.state.borrow().focused_session().is_some() {
-        total.clamp(1, 4)
+    if total == 0 {
+        return;
+    }
+
+    let available_width = context.battlefield_scroller.width();
+    let columns = if available_width <= 0 {
+        if context.state.borrow().focused_session().is_some() {
+            total.clamp(1, 4)
+        } else if total <= 4 {
+            2
+        } else if total <= 6 {
+            3
+        } else {
+            4
+        }
+    } else if context.state.borrow().focused_session().is_some() {
+        ((available_width as usize) / 300).clamp(1, total.clamp(1, 4))
     } else if total <= 4 {
-        2
-    } else if total <= 6 {
-        3
+        if available_width >= 1800 {
+            total
+        } else {
+            2
+        }
+    } else if total == 5 {
+        ((available_width as usize) / 420).clamp(3, 5)
     } else {
-        4
+        ((available_width as usize) / 380).clamp(3, total.min(4))
     } as u32;
     context.cards.set_max_children_per_line(columns);
     context.cards.set_min_children_per_line(columns);
