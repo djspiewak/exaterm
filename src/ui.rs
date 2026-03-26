@@ -25,6 +25,7 @@ struct ProbeWidgets {
     root: gtk::Frame,
     source: gtk::Label,
     body: gtk::TextView,
+    close: gtk::Button,
 }
 
 struct AppContext {
@@ -34,7 +35,6 @@ struct AppContext {
     title: adw::WindowTitle,
     tiles: RefCell<BTreeMap<SessionId, SessionTileWidgets>>,
     probe: ProbeWidgets,
-    open_probe: RefCell<Option<SessionId>>,
 }
 
 pub fn run() -> glib::ExitCode {
@@ -84,8 +84,13 @@ fn build_ui(app: &gtk::Application) {
         title: adw::WindowTitle::new("Exaterm", "Grid-first, detail-on-demand"),
         tiles: RefCell::new(BTreeMap::new()),
         probe,
-        open_probe: RefCell::new(None),
     });
+
+    {
+        let close_button = context.probe.close.clone();
+        let context = context.clone();
+        close_button.connect_clicked(move |_| close_probe(&context));
+    }
 
     let add_shell_button = gtk::Button::builder()
         .label("Add Shell")
@@ -115,6 +120,33 @@ fn build_ui(app: &gtk::Application) {
 
     {
         let context = context.clone();
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        keys.connect_key_pressed(move |_, key, _, _| {
+            if matches!(key, gdk::Key::Return | gdk::Key::KP_Enter) {
+                if let Some(session_id) = context.state.borrow().selected_session() {
+                    activate_terminal_session(&context, session_id);
+                    return glib::Propagation::Stop;
+                }
+            }
+
+            if key == gdk::Key::Escape && context.state.borrow().open_probe().is_some() {
+                close_probe(&context);
+                return glib::Propagation::Stop;
+            }
+
+            if matches!(key.to_unicode(), Some('p' | 'P')) {
+                toggle_probe_for_selection(&context);
+                return glib::Propagation::Stop;
+            }
+
+            glib::Propagation::Proceed
+        });
+        window.add_controller(keys);
+    }
+
+    {
+        let context = context.clone();
         add_shell_button.connect_clicked(move |_| {
             let number = context.state.borrow().sessions().len() + 1;
             let launch = WorkspaceBlueprint::add_shell(number);
@@ -125,7 +157,7 @@ fn build_ui(app: &gtk::Application) {
     {
         let context = context.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(750), move || {
-            if let Some(session_id) = *context.open_probe.borrow() {
+            if let Some(session_id) = context.state.borrow().open_probe() {
                 refresh_probe_snapshot(&context, session_id);
             }
             glib::ControlFlow::Continue
@@ -188,9 +220,9 @@ fn build_tile(
         .css_classes(vec!["tile-footnote".to_string()])
         .build();
     let peek_button = gtk::Button::builder()
-        .label("Peek")
+        .label("Peek · P")
         .css_classes(vec!["peek-button".to_string()])
-        .tooltip_text("Open a temporary output probe for this session")
+        .tooltip_text("Open a temporary output probe for this session, or press P")
         .build();
 
     let title_stack = gtk::Box::builder()
@@ -245,29 +277,16 @@ fn build_tile(
         .child(&content)
         .build();
     root.add_css_class("session-tile");
-
-    let click = gtk::GestureClick::new();
-    {
-        let context = context.clone();
-        click.connect_pressed(move |_, _, _, _| {
-            context.state.borrow_mut().select_session(session_id);
-            refresh_tile_styles(&context);
-        });
-    }
-    root.add_controller(click);
+    install_activate_click(&title, context, session_id);
+    install_activate_click(&subtitle, context, session_id);
+    install_activate_click(&status_label, context, session_id);
+    install_activate_click(&detail, context, session_id);
 
     let terminal_click = gtk::GestureClick::new();
     {
         let context = context.clone();
-        let terminal = terminal.clone();
         terminal_click.connect_pressed(move |_, _, _, _| {
-            {
-                let mut state = context.state.borrow_mut();
-                state.select_session(session_id);
-                state.set_terminal_focus(Some(session_id));
-            }
-            terminal.grab_focus();
-            refresh_tile_styles(&context);
+            activate_terminal_session(&context, session_id);
         });
     }
     terminal.add_controller(terminal_click);
@@ -283,8 +302,7 @@ fn build_tile(
             {
                 let mut state = context.state.borrow_mut();
                 if term.has_focus() {
-                    state.select_session(session_id);
-                    state.set_terminal_focus(Some(session_id));
+                    state.activate_session(session_id);
                 } else if state.focused_terminal() == Some(session_id) {
                     state.set_terminal_focus(None);
                 }
@@ -373,18 +391,18 @@ fn build_probe() -> ProbeWidgets {
         .valign(gtk::Align::Start)
         .margin_top(24)
         .margin_end(24)
+        .width_request(440)
+        .height_request(320)
         .visible(false)
         .build();
     root.add_css_class("probe-surface");
 
-    let widgets = ProbeWidgets { root, source, body };
-
-    {
-        let root = widgets.root.clone();
-        close.connect_clicked(move |_| root.set_visible(false));
+    ProbeWidgets {
+        root,
+        source,
+        body,
+        close,
     }
-
-    widgets
 }
 
 fn spawn_session(
@@ -408,7 +426,7 @@ fn spawn_session(
             update_tile_labels(&context, session_id);
             refresh_window_title(&context);
             refresh_tile_styles(&context);
-            if *context.open_probe.borrow() == Some(session_id) {
+            if context.state.borrow().open_probe() == Some(session_id) {
                 refresh_probe_snapshot(&context, session_id);
             }
         });
@@ -441,7 +459,7 @@ fn spawn_session(
                 update_tile_labels(&context, session_id);
                 refresh_window_title(&context);
                 refresh_tile_styles(&context);
-                if *context.open_probe.borrow() == Some(session_id) {
+                if context.state.borrow().open_probe() == Some(session_id) {
                     refresh_probe_snapshot(&context, session_id);
                 }
             },
@@ -502,7 +520,7 @@ fn refresh_window_title(context: &Rc<AppContext>) {
 
 fn refresh_tile_styles(context: &Rc<AppContext>) {
     let state = context.state.borrow();
-    let open_probe = *context.open_probe.borrow();
+    let open_probe = state.open_probe();
     for (session_id, tile) in context.tiles.borrow().iter() {
         tile.root.remove_css_class("selected");
         tile.root.remove_css_class("terminal-focused");
@@ -520,10 +538,26 @@ fn refresh_tile_styles(context: &Rc<AppContext>) {
 }
 
 fn open_probe(context: &Rc<AppContext>, session_id: SessionId) {
-    *context.open_probe.borrow_mut() = Some(session_id);
+    context.state.borrow_mut().show_probe(session_id);
     context.probe.root.set_visible(true);
     refresh_probe_snapshot(context, session_id);
     refresh_tile_styles(context);
+}
+
+fn close_probe(context: &Rc<AppContext>) {
+    context.state.borrow_mut().close_probe();
+    context.probe.root.set_visible(false);
+    refresh_tile_styles(context);
+}
+
+fn toggle_probe_for_selection(context: &Rc<AppContext>) {
+    let selected = context.state.borrow().selected_session();
+    let current_probe = context.state.borrow().open_probe();
+    match selected {
+        Some(session_id) if current_probe == Some(session_id) => close_probe(context),
+        Some(session_id) => open_probe(context, session_id),
+        None => {}
+    }
 }
 
 fn refresh_probe_snapshot(context: &Rc<AppContext>, session_id: SessionId) {
@@ -560,6 +594,32 @@ fn refresh_probe_snapshot(context: &Rc<AppContext>, session_id: SessionId) {
         session.status.chip_label()
     ));
     context.probe.body.buffer().set_text(&snapshot);
+}
+
+fn activate_terminal_session(context: &Rc<AppContext>, session_id: SessionId) {
+    {
+        let mut state = context.state.borrow_mut();
+        state.activate_session(session_id);
+    }
+    if let Some(tile) = context.tiles.borrow().get(&session_id) {
+        tile.terminal.grab_focus();
+    }
+    refresh_tile_styles(context);
+}
+
+fn install_activate_click<W: IsA<gtk::Widget>>(
+    widget: &W,
+    context: &Rc<AppContext>,
+    session_id: SessionId,
+) {
+    let click = gtk::GestureClick::new();
+    {
+        let context = context.clone();
+        click.connect_pressed(move |_, _, _, _| {
+            activate_terminal_session(&context, session_id);
+        });
+    }
+    widget.add_controller(click);
 }
 
 fn load_css() {

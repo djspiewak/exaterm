@@ -217,6 +217,7 @@ pub struct WorkspaceState {
     sessions: Vec<SessionRecord>,
     selected_session: Option<SessionId>,
     focused_terminal: Option<SessionId>,
+    open_probe: Option<SessionId>,
 }
 
 impl WorkspaceState {
@@ -229,6 +230,7 @@ impl WorkspaceState {
         self.sessions.clear();
         self.selected_session = None;
         self.focused_terminal = None;
+        self.open_probe = None;
 
         let mut ids = Vec::with_capacity(launches.len());
         for launch in launches {
@@ -264,6 +266,10 @@ impl WorkspaceState {
         self.focused_terminal
     }
 
+    pub fn open_probe(&self) -> Option<SessionId> {
+        self.open_probe
+    }
+
     pub fn select_session(&mut self, session_id: SessionId) {
         if self.sessions.iter().any(|session| session.id == session_id) {
             self.selected_session = Some(session_id);
@@ -273,6 +279,24 @@ impl WorkspaceState {
     pub fn set_terminal_focus(&mut self, session_id: Option<SessionId>) {
         self.focused_terminal =
             session_id.filter(|id| self.sessions.iter().any(|session| session.id == *id));
+    }
+
+    pub fn activate_session(&mut self, session_id: SessionId) {
+        if self.sessions.iter().any(|session| session.id == session_id) {
+            self.selected_session = Some(session_id);
+            self.focused_terminal = Some(session_id);
+        }
+    }
+
+    pub fn show_probe(&mut self, session_id: SessionId) {
+        if self.sessions.iter().any(|session| session.id == session_id) {
+            self.selected_session = Some(session_id);
+            self.open_probe = Some(session_id);
+        }
+    }
+
+    pub fn close_probe(&mut self) {
+        self.open_probe = None;
     }
 
     pub fn mark_spawned(&mut self, session_id: SessionId, pid: u32) {
@@ -399,5 +423,36 @@ mod tests {
         assert_eq!(WorkspaceState::tile_position(1, 2), (1, 0));
         assert_eq!(WorkspaceState::tile_position(2, 2), (0, 1));
         assert_eq!(WorkspaceState::tile_position(5, 3), (2, 1));
+    }
+
+    #[test]
+    fn activate_session_moves_selection_and_terminal_focus_together() {
+        let mut state = WorkspaceState::new();
+        let first = state.add_session(SessionLaunch::shell("One", "shell", "banner"));
+        let second = state.add_session(SessionLaunch::shell("Two", "shell", "banner"));
+
+        state.activate_session(second);
+
+        assert_eq!(state.selected_session(), Some(second));
+        assert_eq!(state.focused_terminal(), Some(second));
+        assert_ne!(state.selected_session(), Some(first));
+    }
+
+    #[test]
+    fn showing_and_closing_probe_tracks_selected_session() {
+        let mut state = WorkspaceState::new();
+        let first = state.add_session(SessionLaunch::shell("One", "shell", "banner"));
+        let second = state.add_session(SessionLaunch::shell("Two", "shell", "banner"));
+
+        state.show_probe(second);
+        assert_eq!(state.selected_session(), Some(second));
+        assert_eq!(state.open_probe(), Some(second));
+
+        state.close_probe();
+        assert_eq!(state.open_probe(), None);
+        assert_eq!(state.selected_session(), Some(second));
+
+        state.show_probe(first);
+        assert_eq!(state.open_probe(), Some(first));
     }
 }
