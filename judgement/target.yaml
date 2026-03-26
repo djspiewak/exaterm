@@ -1,0 +1,16 @@
+app_id: exaterm
+app_contract_id: exaterm-v1
+launch:
+  cwd: /home/luke/projects/exaterm
+  command:
+    - cargo
+    - run
+window_match:
+  title_substring: Exaterm
+  wm_class: exaterm
+contract:
+  app: /home/luke/projects/exaterm/judgement/app.md
+notes:
+  - Prefer X11 for automation.
+  - Resize the main window before evaluating dense multi-session workflows.
+  - The app launches directly into a built-in demo workspace.
