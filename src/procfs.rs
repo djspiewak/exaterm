@@ -30,6 +30,45 @@ pub fn format_process_tree(root_pid: u32) -> io::Result<String> {
     Ok(lines.join("\n"))
 }
 
+pub fn dominant_child_command(root_pid: u32) -> io::Result<Option<String>> {
+    let entries = read_process_table("/proc")?;
+    Ok(dominant_child_command_from_entries(&entries, root_pid))
+}
+
+fn dominant_child_command_from_entries(
+    entries: &BTreeMap<u32, ProcessEntry>,
+    root_pid: u32,
+) -> Option<String> {
+    let Some(root) = entries.get(&root_pid) else {
+        return None;
+    };
+
+    let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for entry in entries.values() {
+        children.entry(entry.ppid).or_default().push(entry.pid);
+    }
+    for pids in children.values_mut() {
+        pids.sort_unstable();
+    }
+
+    let mut stack = children.get(&root.pid).cloned().unwrap_or_default();
+    while let Some(pid) = stack.pop() {
+        let Some(entry) = entries.get(&pid) else {
+            continue;
+        };
+        if is_significant_command(&entry.command) {
+            return Some(entry.command.clone());
+        }
+        if let Some(child_pids) = children.get(&pid) {
+            for child in child_pids.iter().rev() {
+                stack.push(*child);
+            }
+        }
+    }
+
+    None
+}
+
 fn write_tree(
     pid: u32,
     depth: usize,
@@ -101,9 +140,18 @@ fn parse_stat_line(stat: &str) -> Option<ProcessEntry> {
     })
 }
 
+fn is_significant_command(command: &str) -> bool {
+    !matches!(
+        command,
+        "bash" | "sh" | "dash" | "env" | "sleep" | "timeout" | "systemd" | "date"
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{format_process_tree, parse_stat_line, ProcessEntry};
+    use super::{
+        dominant_child_command_from_entries, format_process_tree, parse_stat_line, ProcessEntry,
+    };
     use std::fs;
     use std::path::PathBuf;
 
@@ -177,5 +225,37 @@ mod tests {
     fn missing_root_process_is_reported() {
         let message = format_process_tree(u32::MAX).expect("function should not fail");
         assert!(message.contains("no longer running"));
+    }
+
+    #[test]
+    fn picks_first_significant_child_command() {
+        let root = tempdir_path("exaterm-procfs-dominant");
+        fs::create_dir_all(root.join("101")).expect("root proc dir");
+        fs::create_dir_all(root.join("202")).expect("shell child dir");
+        fs::create_dir_all(root.join("303")).expect("tool child dir");
+        fs::write(
+            root.join("101").join("stat"),
+            "101 (bash) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        )
+        .expect("write root stat");
+        fs::write(
+            root.join("202").join("stat"),
+            "202 (bash) S 101 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        )
+        .expect("write shell stat");
+        fs::write(
+            root.join("303").join("stat"),
+            "303 (cargo) R 202 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+        )
+        .expect("write tool stat");
+
+        let entries = super::read_process_table(root.to_str().expect("utf8 path"))
+            .expect("table should read");
+        assert_eq!(
+            dominant_child_command_from_entries(&entries, 101),
+            Some("cargo".into())
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 }

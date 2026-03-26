@@ -682,7 +682,7 @@ fn refresh_observation(context: &Rc<AppContext>, session: &crate::model::Session
 
     observation.dominant_process = process_hint.clone();
     observation.active_command =
-        launch_command_hint(&session.launch).or_else(|| observation.dominant_process.clone());
+        observation.dominant_process.clone().or_else(|| launch_command_hint(&session.launch));
     observation.work_output_excerpt = output_excerpt;
     observation.recent_files = session
         .launch
@@ -730,12 +730,11 @@ fn update_battle_card_widgets(context: &Rc<AppContext>, session: &crate::model::
     card.detail.set_visible(card_model.primary_detail.is_some());
 
     let evidence_limit = match card_model.status {
-        BattleCardStatus::Idle | BattleCardStatus::Thinking => 1,
-        BattleCardStatus::Working
-        | BattleCardStatus::Blocked
-        | BattleCardStatus::Failed
-        | BattleCardStatus::Complete
-        | BattleCardStatus::Detached => 1,
+        BattleCardStatus::Idle => 2,
+        BattleCardStatus::Thinking => 1,
+        BattleCardStatus::Working => 2,
+        BattleCardStatus::Blocked | BattleCardStatus::Failed => 2,
+        BattleCardStatus::Complete | BattleCardStatus::Detached => 1,
     };
     let evidence_one = card_model
         .evidence_fragments
@@ -866,7 +865,17 @@ fn apply_tactical_synthesis(
         card_model.primary_detail = Some(primary_fragment.clone());
     }
     if !summary.supporting_fragments.is_empty() {
-        card_model.evidence_fragments = summary.supporting_fragments.clone();
+        let mut merged = card_model.evidence_fragments.clone();
+        for fragment in &summary.supporting_fragments {
+            if !merged
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(fragment))
+            {
+                merged.push(fragment.clone());
+            }
+        }
+        merged.truncate(2);
+        card_model.evidence_fragments = merged;
     }
     if let Some(alignment_fragment) = summary.alignment_fragment.as_ref() {
         card_model.alignment.text = alignment_fragment.clone();
@@ -1104,32 +1113,16 @@ fn launch_command_hint(launch: &SessionLaunch) -> Option<String> {
         SessionKind::WaitingShell => Some("Interactive shell ready".into()),
         SessionKind::PlanningStream => None,
         SessionKind::BlockingPrompt => Some("Waiting on approval prompt".into()),
-        SessionKind::RunningStream => Some("Long-running tool activity".into()),
+        SessionKind::RunningStream => Some("cargo test parser".into()),
         SessionKind::FailingTask => Some("Task exited after failure".into()),
     }
 }
 
 fn read_dominant_process_hint(pid: u32) -> Option<String> {
-    let process_tree = crate::procfs::format_process_tree(pid).ok()?;
-    let mut lines = process_tree.lines().filter(|line| !line.trim().is_empty());
-    let candidate = lines.nth(1).or_else(|| process_tree.lines().next())?;
-    let simplified = candidate
-        .split(" pid=")
-        .next()
-        .unwrap_or(candidate)
-        .replace("  ", " ")
-        .trim()
-        .to_string();
-    let lowered = simplified.to_ascii_lowercase();
-    if lowered.starts_with("bash ")
-        || lowered.starts_with("bash[")
-        || lowered == "bash"
-        || lowered.starts_with("sleep ")
-        || lowered.starts_with("sleep[")
-    {
-        return None;
-    }
-    Some(simplified)
+    crate::procfs::dominant_child_command(pid)
+        .ok()
+        .flatten()
+        .map(|command| command.replace("  ", " ").trim().to_string())
 }
 
 fn is_meaningful_output_line(line: &str) -> bool {

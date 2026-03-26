@@ -338,17 +338,17 @@ fn tactical_copy(
     };
 
     let mut evidence_fragments = Vec::new();
-    if let Some(files) = file_text.as_ref() {
-        push_unique_fragment(
-            &mut evidence_fragments,
-            files.clone(),
-            &[&tactical.headline, tactical.primary_detail.as_deref().unwrap_or("")],
-        );
-    }
     if let Some(output) = output_text.filter(|line| !line.is_empty()) {
         push_unique_fragment(
             &mut evidence_fragments,
             compact_fragment(output),
+            &[&tactical.headline, tactical.primary_detail.as_deref().unwrap_or("")],
+        );
+    }
+    if let Some(files) = file_text.as_ref() {
+        push_unique_fragment(
+            &mut evidence_fragments,
+            files.clone(),
             &[&tactical.headline, tactical.primary_detail.as_deref().unwrap_or("")],
         );
     }
@@ -516,12 +516,36 @@ fn same_meaning(left: &str, right: &str) -> bool {
             .replace('…', "")
             .replace("last touched", "")
             .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
+            .map(ToOwned::to_owned)
+            .collect::<Vec<String>>()
     };
-    let left = normalize(left);
-    let right = normalize(right);
-    left == right || left.contains(&right) || right.contains(&left)
+    let left_words = normalize(left);
+    let right_words = normalize(right);
+    let left = left_words.join(" ");
+    let right = right_words.join(" ");
+    if left == right {
+        return true;
+    }
+
+    if left_words.len().abs_diff(right_words.len()) <= 1 {
+        return left.contains(&right) || right.contains(&left);
+    }
+
+    if left_words.first().map(String::as_str) == Some("running")
+        && left_words.len() == right_words.len() + 1
+        && left_words[1..] == right_words
+    {
+        return true;
+    }
+
+    if right_words.first().map(String::as_str) == Some("running")
+        && right_words.len() == left_words.len() + 1
+        && right_words[1..] == left_words
+    {
+        return true;
+    }
+
+    false
 }
 
 fn looks_like_narrative(line: &str) -> bool {
@@ -586,8 +610,8 @@ fn mentions_editing(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_battle_card, derive_battle_card_status, BattleCardStatus, DeterministicIntentEngine,
-        IntentEngine, IntentSource, ObservedActivity, SignalTone,
+        build_battle_card, derive_battle_card_status, same_meaning, BattleCardStatus,
+        DeterministicIntentEngine, IntentEngine, IntentSource, ObservedActivity, SignalTone,
     };
     use crate::model::{SessionId, SessionKind, SessionLaunch, SessionRecord, SessionStatus};
 
@@ -749,5 +773,14 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("Quiet after the terminal became ready"));
+    }
+
+    #[test]
+    fn richer_output_fragments_are_not_treated_as_duplicate_headlines() {
+        assert!(!same_meaning(
+            "cargo test parser: 2 failures remain",
+            "cargo test parser"
+        ));
+        assert!(same_meaning("Running cargo test parser", "cargo test parser"));
     }
 }
