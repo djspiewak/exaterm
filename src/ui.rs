@@ -1,10 +1,9 @@
 use crate::demo::WorkspaceBlueprint;
 use crate::model::{
-    SessionId, SessionKind, SessionLaunch, SessionStatus, WorkspaceState,
+    SessionId, SessionKind, SessionLaunch, WorkspaceState,
 };
 use crate::supervision::{
-    build_battle_card, BattleCardStatus, DeterministicIntentEngine, IntentSource,
-    ObservedActivity,
+    build_battle_card, BattleCardStatus, DeterministicIntentEngine, ObservedActivity,
 };
 use gtk::gdk;
 use gtk::prelude::*;
@@ -21,15 +20,14 @@ const APP_ID: &str = "io.exaterm.Exaterm";
 #[derive(Clone)]
 struct SessionCardWidgets {
     row: gtk::FlowBoxChild,
+    frame: gtk::Frame,
     status: gtk::Label,
     recency: gtk::Label,
-    command: gtk::Label,
-    intent: gtk::Label,
-    reality: gtk::Label,
-    files: gtk::Label,
-    output: gtk::Label,
-    correlation: gtk::Label,
-    intervene: gtk::Button,
+    headline: gtk::Label,
+    detail: gtk::Label,
+    evidence_one: gtk::Label,
+    evidence_two: gtk::Label,
+    alert: gtk::Label,
     terminal: vte::Terminal,
     terminal_page: String,
 }
@@ -361,40 +359,30 @@ fn build_battle_card_widgets(
         .xalign(1.0)
         .css_classes(vec!["card-recency".to_string()])
         .build();
-    let command = gtk::Label::builder()
+    let headline = gtk::Label::builder()
         .xalign(0.0)
         .wrap(true)
-        .css_classes(vec!["card-command".to_string()])
+        .css_classes(vec!["card-headline".to_string()])
         .build();
-    let intent = gtk::Label::builder()
+    let detail = gtk::Label::builder()
         .xalign(0.0)
         .wrap(true)
-        .css_classes(vec!["card-line".to_string()])
+        .css_classes(vec!["card-detail".to_string()])
         .build();
-    let reality = gtk::Label::builder()
+    let evidence_one = gtk::Label::builder()
         .xalign(0.0)
         .wrap(true)
-        .css_classes(vec!["card-line".to_string()])
+        .css_classes(vec!["card-evidence".to_string()])
         .build();
-    let files = gtk::Label::builder()
+    let evidence_two = gtk::Label::builder()
         .xalign(0.0)
         .wrap(true)
-        .css_classes(vec!["card-line".to_string()])
+        .css_classes(vec!["card-evidence".to_string()])
         .build();
-    let output = gtk::Label::builder()
+    let alert = gtk::Label::builder()
         .xalign(0.0)
         .wrap(true)
-        .css_classes(vec!["card-line".to_string()])
-        .build();
-    let correlation = gtk::Label::builder()
-        .xalign(0.0)
-        .wrap(true)
-        .css_classes(vec!["card-correlation".to_string()])
-        .build();
-    let intervene = gtk::Button::builder()
-        .label("Intervene")
-        .css_classes(vec!["intervene-button".to_string()])
-        .tooltip_text("Promote this session into the real terminal")
+        .css_classes(vec!["card-alert".to_string()])
         .build();
 
     let header_left = gtk::Box::builder()
@@ -420,36 +408,26 @@ fn build_battle_card_widgets(
     header.append(&header_left);
     header.append(&header_right);
 
-    let action_hint = gtk::Label::builder()
-        .label("Click to select · Enter or Intervene for focused terminal")
-        .xalign(0.0)
-        .css_classes(vec!["card-action-hint".to_string()])
-        .hexpand(true)
+    let evidence_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(6)
         .build();
-
-    let actions = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .build();
-    actions.append(&action_hint);
-    actions.append(&intervene);
+    evidence_box.append(&evidence_one);
+    evidence_box.append(&evidence_two);
 
     let content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(8)
+        .spacing(10)
         .margin_top(14)
         .margin_bottom(14)
         .margin_start(14)
         .margin_end(14)
         .build();
     content.append(&header);
-    content.append(&command);
-    content.append(&intent);
-    content.append(&reality);
-    content.append(&files);
-    content.append(&output);
-    content.append(&correlation);
-    content.append(&actions);
+    content.append(&headline);
+    content.append(&detail);
+    content.append(&evidence_box);
+    content.append(&alert);
 
     let frame = gtk::Frame::builder().child(&content).build();
     frame.add_css_class("battle-card");
@@ -464,20 +442,10 @@ fn build_battle_card_widgets(
         let click = gtk::GestureClick::new();
         click.connect_released(move |_, _, _, _| {
             context.cards.select_child(&row);
-            if context.state.borrow().focused_session().is_some() {
-                show_intervention(&context, session_id);
-            } else {
-                context.state.borrow_mut().select_session(session_id);
-                refresh_card_styles(&context);
-            }
+            context.state.borrow_mut().select_session(session_id);
+            show_intervention(&context, session_id);
         });
         frame.add_controller(click);
-    }
-
-    {
-        let context = context.clone();
-        let session_id = session.id;
-        intervene.connect_clicked(move |_| show_intervention(&context, session_id));
     }
 
     let terminal = vte::Terminal::builder()
@@ -493,15 +461,14 @@ fn build_battle_card_widgets(
 
     SessionCardWidgets {
         row,
+        frame,
         status,
         recency,
-        command,
-        intent,
-        reality,
-        files,
-        output,
-        correlation,
-        intervene,
+        headline,
+        detail,
+        evidence_one,
+        evidence_two,
+        alert,
         terminal,
         terminal_page: format!("session-{}", session.id.0),
     }
@@ -630,48 +597,27 @@ fn update_battle_card_widgets(context: &Rc<AppContext>, session: &crate::model::
     );
 
     apply_battle_status_style(&card.status, card_model.status);
+    apply_battle_card_surface_style(&card.frame, card_model.status);
     card.status.set_label(card_model.status.label());
     card.recency.set_label(&card_model.recency_label);
-    card.command
-        .set_label(&header_command_label(&observed, session.status));
-    card.intent.set_label(&format!(
-        "{}: {}",
-        match card_model.intent.as_ref().map(|intent| intent.source) {
-            Some(IntentSource::Stated) => "Intent",
-            Some(IntentSource::Inferred) => "Inferred",
-            None => "Intent",
-        },
-        card_model
-            .intent
-            .as_ref()
-            .map(|intent| intent.text.as_str())
-            .unwrap_or("No recent visible intent")
-    ));
-    card.reality.set_label(&card_model.observed_summary);
+    card.headline.set_label(&card_model.headline);
+    card.detail
+        .set_label(card_model.primary_detail.as_deref().unwrap_or(""));
+    card.detail.set_visible(card_model.primary_detail.is_some());
 
-    let has_files = card_model.file_summary.is_some();
-    card.files
-        .set_label(card_model.file_summary.as_deref().unwrap_or("Files: no recent file evidence"));
-    card.files.set_visible(has_files);
+    let evidence_one = card_model.evidence_fragments.first().map(String::as_str).unwrap_or("");
+    let evidence_two = card_model
+        .evidence_fragments
+        .get(1)
+        .map(String::as_str)
+        .unwrap_or("");
+    card.evidence_one.set_label(evidence_one);
+    card.evidence_two.set_label(evidence_two);
+    card.evidence_one.set_visible(!evidence_one.is_empty());
+    card.evidence_two.set_visible(!evidence_two.is_empty());
 
-    let has_output = card_model.output_summary.is_some();
-    card.output
-        .set_label(card_model.output_summary.as_deref().unwrap_or("Output: no high-signal excerpt yet"));
-    card.output.set_visible(has_output || matches!(card_model.status, BattleCardStatus::Failed));
-
-    card.correlation.set_label(&card_model.correlation.narrative);
-    if card_model.correlation.suspicious_mismatch {
-        card.correlation.add_css_class("correlation-alert");
-    } else {
-        card.correlation.remove_css_class("correlation-alert");
-    }
-
-    card.intervene
-        .set_label(if context.state.borrow().focused_session() == Some(session.id) {
-            "Focused"
-        } else {
-            "Intervene"
-        });
+    card.alert.set_label(card_model.alert.as_deref().unwrap_or(""));
+    card.alert.set_visible(card_model.alert.is_some());
 }
 
 fn refresh_workspace(context: &Rc<AppContext>) {
@@ -850,22 +796,23 @@ fn read_dominant_process_hint(pid: u32) -> Option<String> {
     let process_tree = crate::procfs::format_process_tree(pid).ok()?;
     let mut lines = process_tree.lines().filter(|line| !line.trim().is_empty());
     let candidate = lines.nth(1).or_else(|| process_tree.lines().next())?;
-    Some(candidate.trim().replace("  ", " "))
-}
-
-fn header_command_label(observed: &ObservedActivity, session_status: SessionStatus) -> String {
-    if let Some(command) = observed.active_command.as_ref() {
-        return command.clone();
+    let simplified = candidate
+        .split(" pid=")
+        .next()
+        .unwrap_or(candidate)
+        .replace("  ", " ")
+        .trim()
+        .to_string();
+    let lowered = simplified.to_ascii_lowercase();
+    if lowered.starts_with("bash ")
+        || lowered.starts_with("bash[")
+        || lowered == "bash"
+        || lowered.starts_with("sleep ")
+        || lowered.starts_with("sleep[")
+    {
+        return None;
     }
-    if let Some(process) = observed.dominant_process.as_ref() {
-        return process.clone();
-    }
-    match session_status {
-        SessionStatus::Blocked => "Awaiting explicit operator input".into(),
-        SessionStatus::Failed(code) => format!("Last command exited with code {code}"),
-        SessionStatus::Complete => "Main activity completed".into(),
-        _ => "No active command classified yet".into(),
-    }
+    Some(simplified)
 }
 
 fn is_meaningful_output_line(line: &str) -> bool {
@@ -902,6 +849,30 @@ fn apply_battle_status_style(label: &gtk::Label, status: BattleCardStatus) {
     });
 }
 
+fn apply_battle_card_surface_style(frame: &gtk::Frame, status: BattleCardStatus) {
+    for css in [
+        "card-idle",
+        "card-thinking",
+        "card-working",
+        "card-blocked",
+        "card-failed",
+        "card-complete",
+        "card-detached",
+    ] {
+        frame.remove_css_class(css);
+    }
+
+    frame.add_css_class(match status {
+        BattleCardStatus::Idle => "card-idle",
+        BattleCardStatus::Thinking => "card-thinking",
+        BattleCardStatus::Working => "card-working",
+        BattleCardStatus::Blocked => "card-blocked",
+        BattleCardStatus::Failed => "card-failed",
+        BattleCardStatus::Complete => "card-complete",
+        BattleCardStatus::Detached => "card-detached",
+    });
+}
+
 fn load_css() {
     let provider = gtk::CssProvider::new();
     provider.load_from_string(
@@ -929,28 +900,28 @@ fn load_css() {
         .battle-card {
             border-radius: 22px;
             border: 1px solid rgba(163, 175, 194, 0.18);
-            background: rgba(10, 18, 28, 0.96);
+            background: rgba(10, 18, 28, 0.94);
             box-shadow: 0 22px 42px rgba(0, 0, 0, 0.28);
             min-width: 392px;
-            min-height: 262px;
+            min-height: 230px;
         }
 
         .card-title {
             font-weight: 800;
-            font-size: 18px;
+            font-size: 17px;
             color: #f8fafc;
         }
 
         .card-subtitle {
             color: rgba(196, 208, 222, 0.72);
-            font-size: 14px;
+            font-size: 13px;
         }
 
         .card-status {
-            border-radius: 999px;
-            padding: 5px 14px;
             font-weight: 800;
-            font-size: 12px;
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
         }
 
         .card-recency {
@@ -958,30 +929,26 @@ fn load_css() {
             font-size: 12px;
         }
 
-        .card-command {
-            color: #dbeafe;
+        .card-headline {
+            color: #f8fafc;
+            font-weight: 800;
+            font-size: 20px;
+        }
+
+        .card-detail {
+            color: rgba(221, 229, 238, 0.92);
+            font-size: 14px;
+        }
+
+        .card-evidence {
+            color: rgba(185, 201, 218, 0.88);
+            font-size: 13px;
+        }
+
+        .card-alert {
+            color: #fecaca;
+            font-size: 13px;
             font-weight: 700;
-            font-size: 15px;
-        }
-
-        .card-line {
-            color: rgba(225, 232, 240, 0.88);
-            font-size: 14px;
-        }
-
-        .card-correlation {
-            color: rgba(147, 197, 253, 0.9);
-            font-size: 14px;
-        }
-
-        .card-correlation.correlation-alert {
-            color: #fca5a5;
-        }
-
-        .card-action-hint {
-            color: rgba(148, 163, 184, 0.82);
-            font-size: 12px;
-            letter-spacing: 0.04em;
         }
 
         .focus-title {
@@ -1007,7 +974,7 @@ fn load_css() {
             margin-top: 4px;
         }
 
-        .pill, .intervene-button {
+        .pill {
             border-radius: 999px;
             padding: 6px 14px;
         }
@@ -1017,48 +984,71 @@ fn load_css() {
             color: #dbeafe;
         }
 
-        .intervene-button {
-            background: rgba(144, 230, 189, 0.18);
-            color: #d1fae5;
-        }
-
         flowboxchild.focused-card > * {
             border-color: rgba(110, 231, 183, 0.92);
             box-shadow: 0 0 0 1px rgba(110, 231, 183, 0.78), 0 20px 38px rgba(7, 88, 57, 0.22);
         }
 
+        .card-idle {
+            background: linear-gradient(180deg, rgba(60, 48, 12, 0.98) 0%, rgba(26, 23, 10, 0.97) 100%);
+            border-color: rgba(250, 204, 21, 0.42);
+        }
+
+        .card-thinking {
+            background: linear-gradient(180deg, rgba(19, 32, 55, 0.98) 0%, rgba(11, 21, 36, 0.97) 100%);
+            border-color: rgba(125, 151, 183, 0.3);
+        }
+
+        .card-working {
+            background: linear-gradient(180deg, rgba(10, 49, 32, 0.98) 0%, rgba(10, 25, 18, 0.97) 100%);
+            border-color: rgba(74, 222, 128, 0.34);
+        }
+
+        .card-blocked {
+            background: linear-gradient(180deg, rgba(58, 31, 12, 0.98) 0%, rgba(28, 17, 10, 0.97) 100%);
+            border-color: rgba(251, 146, 60, 0.38);
+        }
+
+        .card-failed {
+            background: linear-gradient(180deg, rgba(61, 20, 24, 0.98) 0%, rgba(30, 12, 16, 0.97) 100%);
+            border-color: rgba(248, 113, 113, 0.38);
+        }
+
+        .card-complete {
+            background: linear-gradient(180deg, rgba(12, 44, 45, 0.98) 0%, rgba(8, 22, 24, 0.97) 100%);
+            border-color: rgba(94, 234, 212, 0.34);
+        }
+
+        .card-detached {
+            background: linear-gradient(180deg, rgba(40, 20, 57, 0.98) 0%, rgba(18, 10, 28, 0.97) 100%);
+            border-color: rgba(192, 132, 252, 0.34);
+        }
+
         .battle-idle {
-            background: rgba(251, 191, 36, 0.18);
             color: #fde68a;
         }
 
         .battle-thinking {
-            background: rgba(148, 163, 184, 0.16);
-            color: #e2e8f0;
+            color: #dbe7f5;
         }
 
         .battle-working {
-            background: rgba(74, 222, 128, 0.18);
             color: #86efac;
         }
 
         .battle-blocked {
-            background: rgba(249, 115, 22, 0.18);
             color: #fdba74;
         }
 
         .battle-failed {
-            background: rgba(248, 113, 113, 0.18);
             color: #fca5a5;
         }
 
         .battle-complete {
-            background: rgba(94, 234, 212, 0.16);
             color: #99f6e4;
         }
 
         .battle-detached {
-            background: rgba(192, 132, 252, 0.18);
             color: #e9d5ff;
         }
 
@@ -1075,14 +1065,17 @@ fn load_css() {
 
         .focus-mode .card-subtitle,
         .focus-mode .card-status,
-        .focus-mode .card-recency,
-        .focus-mode .card-action-hint {
+        .focus-mode .card-recency {
             font-size: 11px;
         }
 
-        .focus-mode .card-command,
-        .focus-mode .card-line,
-        .focus-mode .card-correlation {
+        .focus-mode .card-headline {
+            font-size: 15px;
+        }
+
+        .focus-mode .card-detail,
+        .focus-mode .card-evidence,
+        .focus-mode .card-alert {
             font-size: 12px;
         }
 

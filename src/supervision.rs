@@ -59,11 +59,10 @@ pub struct BattleCardViewModel {
     pub subtitle: String,
     pub status: BattleCardStatus,
     pub recency_label: String,
-    pub intent: Option<IntentSummary>,
-    pub observed_summary: String,
-    pub file_summary: Option<String>,
-    pub output_summary: Option<String>,
-    pub correlation: CorrelationSummary,
+    pub headline: String,
+    pub primary_detail: Option<String>,
+    pub evidence_fragments: Vec<String>,
+    pub alert: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -137,15 +136,8 @@ pub fn build_battle_card(
     };
     let intent = intent_engine.determine_intent(&intent_context);
     let status = derive_battle_card_status(record.status, observed, intent.as_ref());
-
-    let observed_summary = observed_summary(observed);
-    let file_summary = (!observed.recent_files.is_empty())
-        .then(|| format!("Files: {}", summarize_files(&observed.recent_files)));
-    let output_summary = observed
-        .work_output_excerpt
-        .as_ref()
-        .map(|excerpt| format!("Output: {excerpt}"));
     let correlation = derive_correlation(intent.as_ref(), observed);
+    let tactical = tactical_copy(record.status, status, observed, intent.as_ref(), &correlation);
 
     BattleCardViewModel {
         session_id: record.id,
@@ -153,11 +145,10 @@ pub fn build_battle_card(
         subtitle: record.launch.subtitle.clone(),
         status,
         recency_label: recency_label(observed.idle_seconds, status),
-        intent,
-        observed_summary,
-        file_summary,
-        output_summary,
-        correlation,
+        headline: tactical.headline,
+        primary_detail: tactical.primary_detail,
+        evidence_fragments: tactical.evidence_fragments,
+        alert: tactical.alert,
     }
 }
 
@@ -201,19 +192,6 @@ pub fn derive_battle_card_status(
     }
 }
 
-fn observed_summary(observed: &ObservedActivity) -> String {
-    if let Some(command) = observed.active_command.as_ref() {
-        return format!("Reality: {command}");
-    }
-    if let Some(process) = observed.dominant_process.as_ref() {
-        return format!("Reality: {process}");
-    }
-    if let Some(idle) = observed.idle_seconds {
-        return format!("Reality: no meaningful activity for {}s", idle);
-    }
-    "Reality: insufficient runtime evidence yet".into()
-}
-
 fn recency_label(idle_seconds: Option<u64>, status: BattleCardStatus) -> String {
     match (status, idle_seconds) {
         (BattleCardStatus::Idle, Some(seconds)) => format!("idle {seconds}s"),
@@ -221,6 +199,152 @@ fn recency_label(idle_seconds: Option<u64>, status: BattleCardStatus) -> String 
         (_, Some(seconds)) => format!("active {seconds}s ago"),
         _ => "recency unknown".into(),
     }
+}
+
+struct TacticalCopy {
+    headline: String,
+    primary_detail: Option<String>,
+    evidence_fragments: Vec<String>,
+    alert: Option<String>,
+}
+
+fn tactical_copy(
+    session_status: SessionStatus,
+    status: BattleCardStatus,
+    observed: &ObservedActivity,
+    intent: Option<&IntentSummary>,
+    correlation: &CorrelationSummary,
+) -> TacticalCopy {
+    let intent_text = intent.map(|intent| intent.text.as_str());
+    let command_text = observed.active_command.as_deref();
+    let process_text = observed.dominant_process.as_deref();
+    let output_text = observed.work_output_excerpt.as_deref();
+    let file_text = (!observed.recent_files.is_empty()).then(|| summarize_files(&observed.recent_files));
+
+    let alert = correlation
+        .suspicious_mismatch
+        .then(|| compact_fragment(&correlation.narrative));
+
+    let mut tactical = match status {
+        BattleCardStatus::Idle => TacticalCopy {
+            headline: compact_fragment(
+                intent_text
+                    .or(command_text)
+                    .or(output_text)
+                    .unwrap_or("Waiting for the next meaningful step"),
+            ),
+            primary_detail: output_text
+                .filter(|_| session_status != SessionStatus::Blocked)
+                .map(compact_fragment)
+                .or_else(|| file_text.clone().map(|files| format!("Last touched {files}"))),
+            evidence_fragments: Vec::new(),
+            alert,
+        },
+        BattleCardStatus::Thinking => TacticalCopy {
+            headline: compact_fragment(
+                intent_text
+                    .or(command_text)
+                    .or(process_text)
+                    .unwrap_or("Working through the next step"),
+            ),
+            primary_detail: output_text.map(compact_fragment),
+            evidence_fragments: Vec::new(),
+            alert,
+        },
+        BattleCardStatus::Working => TacticalCopy {
+            headline: compact_fragment(
+                command_text
+                    .or(process_text)
+                    .or(intent_text)
+                    .unwrap_or("Concrete work is underway"),
+            ),
+            primary_detail: intent_text
+                .filter(|intent| Some(*intent) != command_text)
+                .map(compact_fragment)
+                .or_else(|| output_text.map(compact_fragment)),
+            evidence_fragments: Vec::new(),
+            alert,
+        },
+        BattleCardStatus::Blocked => TacticalCopy {
+            headline: compact_fragment(
+                output_text
+                    .or(command_text)
+                    .or(intent_text)
+                    .unwrap_or("Needs operator input"),
+            ),
+            primary_detail: Some("Waiting on an explicit unblock".into()),
+            evidence_fragments: Vec::new(),
+            alert,
+        },
+        BattleCardStatus::Failed => TacticalCopy {
+            headline: compact_fragment(
+                output_text
+                    .or(command_text)
+                    .or(process_text)
+                    .unwrap_or("The last action failed"),
+            ),
+            primary_detail: Some(match session_status {
+                SessionStatus::Failed(code) => format!("Exit code {code}"),
+                _ => "Failure needs inspection".into(),
+            }),
+            evidence_fragments: Vec::new(),
+            alert,
+        },
+        BattleCardStatus::Complete => TacticalCopy {
+            headline: compact_fragment(
+                output_text
+                    .or(intent_text)
+                    .or(command_text)
+                    .unwrap_or("Completed"),
+            ),
+            primary_detail: None,
+            evidence_fragments: Vec::new(),
+            alert,
+        },
+        BattleCardStatus::Detached => TacticalCopy {
+            headline: "Session detached".into(),
+            primary_detail: Some("Runtime visibility is no longer healthy".into()),
+            evidence_fragments: Vec::new(),
+            alert,
+        },
+    };
+
+    let mut evidence_fragments = Vec::new();
+    if let Some(files) = file_text.as_ref() {
+        push_unique_fragment(
+            &mut evidence_fragments,
+            files.clone(),
+            &[&tactical.headline, tactical.primary_detail.as_deref().unwrap_or("")],
+        );
+    }
+    if let Some(output) = output_text.filter(|line| !line.is_empty()) {
+        push_unique_fragment(
+            &mut evidence_fragments,
+            compact_fragment(output),
+            &[&tactical.headline, tactical.primary_detail.as_deref().unwrap_or("")],
+        );
+    }
+    if evidence_fragments.len() < 2 {
+        if let Some(process) = process_text {
+            push_unique_fragment(
+                &mut evidence_fragments,
+                compact_fragment(process),
+                &[&tactical.headline, tactical.primary_detail.as_deref().unwrap_or("")],
+            );
+        }
+    }
+    evidence_fragments.truncate(2);
+    tactical.evidence_fragments = evidence_fragments;
+
+    if tactical
+        .primary_detail
+        .as_deref()
+        .is_some_and(|detail| same_meaning(detail, &tactical.headline))
+    {
+        tactical.primary_detail = None;
+    }
+
+    tactical
 }
 
 fn derive_correlation(
@@ -267,6 +391,44 @@ fn summarize_files(files: &[String]) -> String {
         return files.join(", ");
     }
     format!("{}, +{} more", files[..LIMIT].join(", "), files.len() - LIMIT)
+}
+
+fn compact_fragment(text: &str) -> String {
+    const LIMIT: usize = 72;
+    let normalized = normalize_line(text);
+    if normalized.chars().count() <= LIMIT {
+        return normalized;
+    }
+    let mut shortened = normalized.chars().take(LIMIT - 1).collect::<String>();
+    shortened.push('…');
+    shortened
+}
+
+fn push_unique_fragment(fragments: &mut Vec<String>, candidate: String, avoid: &[&str]) {
+    if candidate.is_empty()
+        || fragments.iter().any(|fragment| same_meaning(fragment, &candidate))
+        || avoid.iter().any(|item| same_meaning(item, &candidate))
+    {
+        return;
+    }
+    fragments.push(candidate);
+}
+
+fn same_meaning(left: &str, right: &str) -> bool {
+    let normalize = |value: &str| {
+        value
+            .to_ascii_lowercase()
+            .replace("files:", "")
+            .replace("output:", "")
+            .replace('…', "")
+            .replace("last touched", "")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let left = normalize(left);
+    let right = normalize(right);
+    left == right || left.contains(&right) || right.contains(&left)
 }
 
 fn looks_like_narrative(line: &str) -> bool {
@@ -427,12 +589,13 @@ mod tests {
         );
 
         assert_eq!(card.status, BattleCardStatus::Idle);
-        assert!(card.correlation.narrative.contains("aligned"));
         assert_eq!(card.recency_label, "idle 52s");
-        assert_eq!(
-            card.intent.expect("intent should exist").source,
-            IntentSource::Stated
-        );
+        assert!(card.headline.contains("rerunning the parser tests"));
+        assert!(card
+            .primary_detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("3 parser tests still failing"));
     }
 
     #[test]
@@ -447,6 +610,6 @@ mod tests {
             &DeterministicIntentEngine,
         );
 
-        assert!(card.correlation.suspicious_mismatch);
+        assert!(card.alert.is_some());
     }
 }

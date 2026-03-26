@@ -1,57 +1,73 @@
 # Exaterm
 
-Exaterm is a Linux desktop app for supervising multiple terminal-native coding agents at once.
+Exaterm is a Linux desktop app for supervising 4 to 8 terminal-native coding agents at once.
 
-Its core job is to let an operator keep a grid of live agent sessions on screen, preserve each agent's native terminal UI as the primary surface, and open temporary probes when deeper inspection is needed.
+Its core job is to give an operator a battlefield view of several live agent sessions, make state and progress legible at a glance, surface enough under-the-covers evidence to verify whether an agent is really making progress, and let the operator jump into a real terminal instantly when intervention is needed.
 
-The experience should be judged primarily as a supervisor for terminal-native workflows, not as a general terminal emulator and not as a replacement shell for Codex, Claude Code, or similar tools.
+Judge this product primarily as a multi-agent supervision surface, not as a general terminal emulator, not as a replacement shell for Codex or Claude Code, and not as an IDE. The north star for the product is described in [`docs/ux-spec.md`](../docs/ux-spec.md).
 
 The most important parts of the experience are:
 
-- Whether the grid supports fast scanning and prioritization across several live sessions.
-- Whether each tile keeps the real terminal/TUI visually primary instead of burying it under management chrome.
-- Whether session status is clear enough to reveal which agent is active, blocked, failed, or needs intervention first.
-- Whether probes make deeper inspection feel fast and local to a tile rather than forcing a full layout change.
-- Whether the operator can move from scan to inspect to direct intervention in the native terminal without friction or loss of orientation.
+- Whether the main screen reads clearly as a supervision grid for 4 to 8 concurrent sessions rather than a generic pane manager or a wall of tiny terminals.
+- Whether each session card makes the agent's state legible at a glance, especially whether it is `Idle`, `Thinking`, `Working`, `Blocked`, or `Failed`.
+- Whether `Idle` has strong enough visual salience that a newly idle agent catches attention quickly without the whole interface becoming noisy.
+- Whether each card inherently communicates what the agent appears to be doing and what the machine is actually doing without literal labeled report rows.
+- Whether command-level evidence such as active subprocesses, file activity, and meaningful output excerpts helps the operator verify whether claimed progress is real.
+- Whether the product helps the operator spot mismatch between visible agent narrative and observed execution.
+- Whether model-assisted tactical synthesis, when present, makes the cards feel more intelligent and useful rather than more verbose or noisy.
+- Whether clicking a card cleanly promotes it into a large, uncluttered real-terminal view for direct intervention.
 
 The workflows that deserve the most evaluation time are:
 
-- Scanning a multi-session grid to identify which agent needs attention first.
-- Opening and dismissing probes for stdout, process tree, or events without losing the surrounding grid context.
-- Keeping a probe pinned while continuing to supervise other sessions.
-- Returning from inspection to direct intervention in the embedded terminal for the selected session.
+- Scanning the grid to understand what all visible agents are doing and decide which one matters most right now.
+- Noticing when a session becomes idle and deciding whether that idle period is healthy waiting, suspicious inactivity, or a blocked state.
+- Comparing a card's visible intent or narrative with its observed activity to see whether they line up.
+- Using the under-the-covers evidence on a card to tell whether the agent is really working, confused, stalled, or failing.
+- Promoting a selected session into focused terminal control and returning back to the grid without losing orientation.
 
 Supporting surfaces still matter, but less:
 
 - session creation and launch controls
 - menus, preferences, and workspace chrome
 - theming and visual polish outside the core supervision loop
-- any auxiliary dialogs that do not materially affect grid supervision
+- any secondary dialogs or controls that do not materially affect scan, verification, or intervention
 
 Quality looks like this:
 
-- The app reads clearly as an agent supervisor, with sessions as the primary object and the grid as the main working posture.
-- The live terminal in each tile remains dominant and legible.
-- Important state changes are easy to spot without turning every tile into a miniature dashboard.
-- Probes feel attached to a source tile, open quickly, are easy to dismiss, and provide useful depth on demand.
-- Focus changes between tile, terminal, and probe are coherent and predictable.
-- The operator can confidently tell what happened after opening a probe or intervening in a session.
-- Dense multi-session layouts remain structurally legible after resizing the window to a realistic working size.
+- The app reads immediately as a commander-style supervision surface for agent runs.
+- The grid remains the main working posture for normal use.
+- Cards are dense, consistent, and easy to compare across multiple sessions.
+- State is readable before the operator reads detailed text.
+- `Idle`, `Thinking`, `Working`, `Blocked`, and `Failed` are visually distinct enough to recognize with a quick scan.
+- Idle is especially easy to spot because it is often the most actionable normal event.
+- Each card provides enough signal about narrative, subprocess activity, file changes, and output to support quick judgment without turning into a labeled report template.
+- The operator can tell whether an agent's visible narrative matches reality.
+- The app exposes useful under-the-covers evidence without forcing the operator to abandon the main grid.
+- Model assistance, if present, improves tactical usefulness by choosing better summaries rather than by adding more copy.
+- Clicking a session for intervention produces a large, comfortable, uncluttered terminal view that feels direct and native.
+- Returning from intervention to the battlefield view is coherent and low-friction.
+- Dense multi-session layouts remain legible at realistic working window sizes.
 
 Weak quality looks like this:
 
-- The product feels like a generic pane manager rather than a supervisor for agent runs.
-- Tile chrome or observability widgets compete with the terminal and reduce the sense that the native TUI is primary.
-- It is hard to tell which session matters most right now.
-- Probes feel modal, disconnected from their source tile, or cumbersome enough that users avoid them.
-- Focus, selection, and terminal input behavior are ambiguous or brittle.
-- Deeper inspection requires abandoning the grid or switching into a different conceptual mode.
-- Dense layouts become visually noisy or hard to parse once several sessions are visible at once.
+- The product feels like a generic multiplexer or pane manager rather than a supervision tool.
+- The overview behaves like a wall of tiny terminals instead of a clear set of battle cards.
+- State is ambiguous or weak enough that the operator must read each card carefully to know what matters.
+- Idle sessions are easy to miss.
+- Visual treatment makes `Thinking`, `Working`, `Blocked`, and `Failed` blur together.
+- The UI shows lots of transcript or chrome but not enough evidence to verify real progress.
+- The cards read like structured summaries with literal `Intent`, `Reality`, or `Output` rows instead of tactical states.
+- Button-heavy card chrome competes with the battlefield scan loop.
+- Model-assisted copy makes the overview more verbose, repetitive, or noisy instead of sharper.
+- It is difficult to tell whether an agent is actually doing work or only narrating work.
+- The product requires too much clicking or mode-switching to get from scan to diagnosis to intervention.
+- Entering a session for intervention still feels cluttered or indirect rather than like direct terminal control.
+- Dense layouts become noisy or structurally hard to parse once several sessions are visible.
 
-When judging this product, spend more time on the core supervision loop than on supporting chrome. The strongest evidence will come from whether the app preserves orientation across scanning, probing, and intervening in a real terminal session.
+When judging this product, spend more time on the core supervision loop than on supporting chrome. The strongest evidence will come from whether the app helps the operator maintain awareness across several agents, catch idleness quickly, verify real work against stated intent, and intervene in the real terminal without losing the battlefield view.
 
 Environment notes:
 
 - This app targets Linux desktop usage.
 - Prefer X11 for automation.
-- Resize the main window to a realistic multi-tile working size before judging density, state clarity, or probe behavior.
+- Resize the main window to a realistic multi-session working size before judging layout density, state clarity, or supervision quality.

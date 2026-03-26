@@ -1,104 +1,441 @@
-# Exaterm UX Specification
+# Exaterm UX Vision
+
+## North Star
+
+Exaterm is a commander's view for supervising 4 to 8 terminal-native coding agents at once.
+
+Its job is not to replace the agent CLI. Its job is to make multi-agent supervision possible.
+
+The core promise is:
+
+- the operator can see what each agent appears to be doing
+- the operator can see what the machine is actually doing
+- the operator can spot mismatch, idleness, blockage, and failure quickly
+- the operator can intervene in the real terminal in one step
+
+Exaterm succeeds when the operator can maintain situational awareness across several concurrent agents without drowning in 8 separate terminal transcripts.
 
 ## Product Definition
 
-Exaterm is a Linux desktop app for supervising multiple terminal-native coding agents at once.
+Exaterm is:
 
-The product is:
+- grid-first and supervision-first
+- designed for 4 to 8 concurrent agent sessions
+- centered on battle cards rather than raw shell panes
+- built around correlating intent with observed execution
+- denser and more operationally useful than any single agent CLI transcript
+- respectful of native terminal workflows when intervention is needed
 
-- grid-first, detail-on-demand
-- a supervisor layer around unmodified terminal apps
-- centered on agent runs and sessions, not generic shell panes
-
-The product is not:
+Exaterm is not:
 
 - a replacement for Codex, Claude Code, or other terminal-native agents
-- a custom agent shell that hides native terminal UX
+- a custom agent shell that hides the agent's native interface
+- an IDE
 - a dashboard-heavy terminal multiplexer
+- a product that claims access to hidden model reasoning
 
-Core design rule: the native TUI stays primary.
+Core design rule: supervision comes first; terminal intervention stays one step away.
 
-## Primary User Posture
+## Core User Job
 
-The default working posture is a grid of live agent sessions on screen. Each tile mostly shows the real terminal surface for that session. The operator scans the grid, identifies which agent needs attention, opens a probe when deeper inspection is needed, then dismisses the probe and returns to the clean grid.
+The operator's top-level job is to keep tabs on several agents working in parallel, often on distinct tasks, and decide where attention belongs right now.
 
-The operator should be able to answer these questions at a glance:
+The operator is not primarily trying to read every terminal in full.
 
-- Which agent is currently active?
-- Which agent is blocked?
-- Which agent failed?
+The operator is trying to answer:
+
+- Which agents are actively making progress?
+- Which agents are idle?
+- Which agents are blocked?
+- Which agents are failing?
+- Which agents are doing something different from what they appear to claim?
 - Which agent needs intervention first?
 
-## Design Principles
+This is a battlefield view, not a single-session cockpit.
 
-- Grid-first, detail-on-demand.
-- Native TUI stays primary.
-- Probes are temporary inspection surfaces, not a second permanent layout.
-- Tile chrome stays light.
-- Observability should help prioritization before diagnosis.
-- Features should not assume deep agent-specific hooks.
+## Primary Working Posture
 
-## Object Model
+The default working posture is a grid of adaptive battle cards.
 
-### Session
+Each battle card represents one supervised agent session. A card can show traces of the real terminal, but the default overview is not a wall of raw terminal surfaces. The overview should instead present the smallest high-value unit of supervisory information: what the agent says it is doing, what the machine is actually doing, and whether those line up.
+
+The operator should be able to sit in the main grid for most of the session and only drop into a real terminal when intervention is required.
+
+## Information Model
+
+Exaterm should distinguish three types of information.
+
+### 1. Intent
+
+Intent is the recent visible narrative of what the agent appears to be doing.
+
+Examples:
+
+- "Investigating failing parser tests"
+- "Updating config loader"
+- "I need to inspect the migration code"
+
+Important constraint: this is not hidden chain-of-thought or internal reasoning. It is visible intent derived from the agent's terminal-visible output when available.
+
+### 2. Observed Activity
+
+Observed activity is what the machine can show directly or infer from evidence.
+
+Examples:
+
+- the active command or dominant subprocess
+- recently spawned processes
+- recent file writes, renames, or creations
+- test progress
+- build progress
+- stdout or stderr emitted by child tools
+- idle periods
+- likely prompts for input
+
+### 3. Inferred Narrative
+
+Inferred narrative is a best-effort synthesis of intent plus observed activity.
+
+Examples:
+
+- "Agent says it is fixing parser tests; observed running `cargo test` and editing `src/parser.rs`."
+- "Agent appears idle after claiming it would run tests."
+- "Agent is likely blocked on a permission or input prompt."
+
+This inferred layer is useful, but it must never pretend to be more certain than the evidence allows.
+
+## Intent / Reality Correlation
+
+The central UX idea in Exaterm is correlation between stated intent and observed reality.
+
+The most valuable supervisory signal is often not the agent's visible narrative or the subprocess data independently. It is the relationship between them.
+
+Healthy examples:
+
+- the agent says it is running tests, and a test process is active
+- the agent says it is editing parser code, and relevant files are changing
+- the agent says it is investigating a failure, and the output stream shows the expected failing tool
+
+Suspicious examples:
+
+- the agent claims progress, but there is no meaningful command, file, or output activity
+- the terminal narrative suggests one task, but the dominant subprocess is doing something unrelated
+- the agent appears confident, but subprocess output shows repeated failure or retry loops
+- the card shows extended idle time immediately after the agent claimed it would do something next
+
+Exaterm should make these matches and mismatches visually obvious.
+
+## Main Screen
+
+The main screen is a resizable grid of session battle cards.
+
+The grid must comfortably support supervision of 4 to 8 concurrent sessions without requiring the operator to manually toggle display modes just to stay oriented.
+
+Recommended default layouts:
+
+- 4 sessions: `2 x 2`
+- 6 sessions: `3 x 2`
+- 8 sessions: `4 x 2` on wide displays, or a denser fallback when needed
+
+The overview should prefer a strict, even grid over freeform windowing. Equal card sizing makes state comparison faster and reduces visual hierarchy drift between sessions.
+
+The main screen may include:
+
+- grid canvas
+- a thin workspace bar for global counts or filters
+- optional workspace-level attention queue or filter controls
+- optional detail expansion area if it does not compete with the grid
+
+The grid remains the dominant region.
+
+The workspace bar should stay minimal. It can show lightweight counts such as:
+
+- `Idle 2`
+- `Working 4`
+- `Failed 1`
+
+It should not compete visually with the card grid.
+
+## Session Object
 
 A session is the primary object in the system. A session represents one supervised terminal-native agent run.
 
 Each session has:
 
-- a terminal surface
 - a stable session identity
 - a launch configuration
+- a native terminal surface
 - runtime state
-- process tree metadata
-- recent event history
-- optional probes attached to it
+- recent visible intent
+- recent command and subprocess activity
+- recent file activity
+- work-output streams
+- event history
+- derived supervisory signals
 
-### Tile
+## Battle Card
 
-A tile is the grid representation of one session.
+A battle card is the default grid representation of one session.
 
-Each tile contains:
+The battle card is the core UX unit of Exaterm. It should provide enough information for prioritization and light diagnosis without forcing the operator into the raw terminal or a secondary inspector.
 
-- the live terminal view
-- light session chrome
-- minimal status signals
-- entry points for opening probes or switching lens
+Each battle card contains:
 
-### Probe
+- session identity
+- high-level status
+- recency and idle information
+- the minimum state-appropriate narrative needed to understand what is happening
+- the minimum evidence needed to decide whether intervention may be warranted
+- whole-card click affordance for intervention
 
-A probe is an attachable inspection surface associated with one session and one lens.
+Recommended overview size:
 
-A probe:
+- width roughly `340-420px`
+- height roughly `190-260px`
 
-- belongs to a source tile
-- floats over the grid
-- may partially obscure nearby tiles
-- can be repositioned
-- can be resized
-- can be dismissed quickly
-- exists in transient or pinned form
+That is enough room for a dense, readable supervisory summary without turning the card into a miniature dashboard.
 
-### Lens
+## Battle Card Anatomy
 
-A lens defines what a probe shows.
+The default card structure should be consistent across all sessions, but the information density inside the card should adapt to the tactical state of the session. The operator should learn one stable scan pattern and reuse it everywhere without every card turning into the same labeled report.
 
-Initial supported lenses:
+Recommended card bands:
 
-- stdout
-- process tree
-- events
+1. Header
+2. Tactical body
+3. Supporting evidence
 
-Optional tile lens switching may also expose:
+### Header
 
-- TUI
-- stdout
-- process tree
-- events
+The header is compact and always visible.
 
-## V1 Observability Boundaries
+Header contents:
 
-Exaterm v1 operates as a supervisor around unmodified terminal apps.
+- session name
+- task or agent label
+- high-level status
+- recency indicator
+- active command or dominant subprocess label
+
+The header should make it easy to answer, in under a second, whether this session is active, idle, blocked, or failing.
+
+The dominant visual elements in the header should be:
+
+- state
+- recency
+- session identity
+
+The active command label should be present, but subordinate to state.
+
+### Tactical Body
+
+The card body should answer the operator's real question for that state, not literally render a schema with lines like `Intent:`, `Reality:`, and `Output:` on every card.
+
+The card should inherently communicate:
+
+- what the session appears to be doing
+- whether it seems healthy, suspicious, blocked, or stalled
+- what single fact matters most right now
+
+This means the body should be state-shaped:
+
+- `Idle` cards emphasize idle age, last meaningful action, and why the idleness may or may not matter
+- `Working` cards emphasize the dominant active task plus one strong evidence fragment
+- `Thinking` cards emphasize the current direction or narrative with a calmer treatment
+- `Blocked` cards emphasize the blocking cause
+- `Failed` cards emphasize the failure headline and one concrete clue
+
+Do not waste space stating the obvious. For example, an idle card should not spend its main line saying that nothing is running. The idle treatment and idle age already imply that the session is not actively progressing.
+
+Do not make the overview card look like a dense inspector with multiple explicit labels and stacked report rows. It should feel like an unfolding tactical picture of the battlefield.
+
+### Supporting Evidence
+
+Below the tactical body, the card may show one or two compact evidence fragments when they materially help the operator judge whether intervention is warranted.
+
+Candidate contents:
+
+- active command
+- dominant subprocess
+- recently written files
+- failing test summary
+- current build step
+- linter error
+- compiler error location
+- migration output
+- likely prompt-for-input state
+- retry loop or repeated failure hint
+
+The goal is not exhaustive telemetry. The goal is rapid supervisory orientation.
+
+These evidence fragments should be compact and concrete. They should not read like a narrated explanation of the card.
+
+File activity is especially important when it grounds whether the agent is actually changing the codebase and where, but it should appear only when it adds decision value.
+
+In tighter layouts, evidence may compress into short fragments such as:
+
+- `Files: src/parser.rs, tests/parser.rs`
+- `Output: 3 parser tests failing`
+- `Output: cargo test still running`
+
+### Intervention Affordance
+
+The whole card is the intervention affordance.
+
+There should be no per-card `Intervene` button in overview mode. There should generally be no buttons on the face of the battle card at all.
+
+Clicking a card means: promote this session into direct terminal control.
+
+The card should therefore feel immediately actionable without adding extra pill buttons, secondary controls, or cluttered action rows.
+
+## Example Battle Card
+
+The product should converge on cards that read roughly like this:
+
+```text
+┌ Agent 3 · Parser Fix                 IDLE · idle 48s ┐
+│ cargo test parser                                         │
+│ Intent: "Now rerunning the parser tests."                 │
+│ Reality: no active subprocesses since last command        │
+│ Files: src/parser.rs, tests/parser.rs                     │
+│ Output: last seen 48s ago · 3 failures                    │
+└ Click to intervene                                        ┘
+```
+
+This is the right density target: enough information to decide whether the session is healthy without replaying the entire terminal transcript.
+
+The important point is not the literal labels in the sketch. The real product should aim for cards that inherently answer those questions rather than spelling out a report schema.
+
+## Adaptive Density
+
+Battle cards should automatically change density based on available space, session urgency, and operator focus.
+
+The operator should not need to click around just to make the overview usable.
+
+### Overview Density
+
+At overview density, the card should emphasize:
+
+- status
+- recency
+- idle detection
+- active command
+- one short tactical summary chosen for the current state
+- one or two compact evidence fragments when they matter
+
+At this density, the card is optimized for scanning 4 to 8 sessions quickly.
+
+Overview cards should not advertise intervention through explicit inline buttons. The action is implicit in the card itself.
+
+### Selected Density
+
+When selected for inspection, a card may expand in place and reveal richer detail without immediately leaving the battlefield view.
+
+Selected state can reveal:
+
+- a larger recent terminal excerpt
+- more detailed subprocess information
+- richer file activity
+- a short recent event timeline
+- a larger work-output window
+
+This state is for diagnosis while preserving workspace context.
+
+### Intervention Focus Mode
+
+When the operator clicks a card with the intent to intervene, that session should come front and center in a focused intervention view.
+
+In this mode:
+
+- the real embedded terminal becomes the primary surface
+- surrounding workspace clutter drops away
+- the terminal is sized up dynamically to a comfortable, reasonable working size
+- the operator should feel like they are directly inside that agent's native terminal
+- returning to the battlefield view should be immediate and predictable
+
+This is not a different product mode. It is a fast promotion from supervision to direct control.
+
+### Intervention Density
+
+When the operator chooses to intervene, the real embedded terminal becomes primary for that session.
+
+The transition should be one step and reversible without losing overall workspace awareness.
+
+## Status Model
+
+Status is intentionally coarse, operator-facing, and action-oriented.
+
+The most important day-to-day supervisory states are:
+
+- `Idle`
+- `Thinking`
+- `Working`
+- `Failed`
+
+Additional edge or terminal states may exist:
+
+- `Blocked`
+- `Complete`
+- `Detached`
+
+Definitions:
+
+- `Idle`: the session appears live but no meaningful command, process, file, or output activity has been observed recently
+- `Thinking`: the agent appears to be producing visible narrative, planning text, or lightweight terminal interaction, but there is not yet strong evidence of substantial tool execution or file activity
+- `Working`: tool runs, subprocess activity, file changes, or meaningful output indicate concrete execution is underway
+- `Failed`: the session or main launched activity exited unexpectedly or entered a clear error condition
+- `Blocked`: the session likely needs user input, permission, missing dependency resolution, or an explicit confirmation step
+- `Complete`: the intended task appears finished
+- `Detached`: the terminal backend or session observability channel is no longer healthy
+
+The distinction between `Thinking` and `Working` matters. A session that is narrating or planning without visible execution is in a different operational state from a session that is actively running tests, editing files, or driving tools.
+
+Status assignment must be explainable from evidence. The UI should never imply confidence it does not have.
+
+## State Priority
+
+Not all states deserve equal visual weight.
+
+In normal supervision:
+
+- `Idle` should be the most attention-grabbing state because it is the most common actionable event
+- `Failed` should be immediately unmistakable and severe
+- `Blocked` should be visually clear and distinct from idle
+- `Working` should read as healthy forward motion, not as an alert
+- `Thinking` should read as live but pre-execution, calmer than working and much calmer than idle or failed
+
+The operator should be able to scan the grid and spot a newly idle agent before reading any text.
+
+## Idle Detection
+
+Idle detection is first-class actionable intelligence.
+
+The operator should be able to tell:
+
+- that a session is idle
+- how long it has been idle
+- whether the idle period followed claimed next steps
+- whether the session is probably harmlessly waiting or suspiciously stalled
+
+An idle agent is not just a quiet agent. The product should distinguish:
+
+- quiet but healthy long-running work
+- quiet because the agent is waiting on external output
+- quiet because nothing is happening
+- quiet because the session is blocked on input
+
+Recency cues should always be visible, for example:
+
+- `active 4s ago`
+- `idle 52s`
+- `no file writes for 2m`
+- `no subprocess output since last command`
+
+Idle should also have strong visual salience in the grid. In most workflows, a newly idle agent is the event most likely to require operator judgment, so the card should make that transition obvious without turning the whole interface into an alarm system.
+
+## Observability Boundaries
+
+Exaterm v1 should aggressively pursue useful command-level observability without requiring deep agent-specific integrations.
 
 Available without deep integration:
 
@@ -106,571 +443,400 @@ Available without deep integration:
 - terminal stream capture
 - process tree tracking via `/proc`
 - operator controls
-- session event derivation from process and stream observations
+- event derivation from process and stream observations
 
-Available with shallow adapters:
+Potentially available through wrapping, launch control, tracing, or adapters:
 
-- semantic hints inferred from logs or known output patterns
+- subprocess stdio capture
+- attribution of observed output to the main process or selected child processes
+- file activity capture
+- test/build progress extraction
+- known tool pattern extraction
 
 Not assumed in v1:
 
-- internal agent turn state
-- tool call state
-- model thinking state
-- perfect attribution of stdout to arbitrary subprocesses
+- hidden model reasoning
+- internal tool-call state from every agent framework
+- perfect stdout attribution in every environment
+- perfect attribution of every file change to the exact responsible subprocess
 
-Important constraint: v1 should treat captured output as session output by default. A "main process stdout" view is allowed only when launch control or wrapping makes that attribution reliable enough.
+Important constraint: when observability is uncertain, the UI must explicitly label that uncertainty rather than pretending to know more than it does.
 
-## Information Architecture
+## Generic Extraction Strategy
 
-### Main Screen
+The product should not depend on an LLM just to parse terminal activity, but Exaterm should use model-assisted synthesis as part of the core supervision design when it materially improves tactical usefulness.
 
-The main screen is a resizable grid of session tiles with floating probes layered above it.
+The architecture should therefore be hybrid:
 
-Main screen regions:
+- a deterministic evidence pipeline as the source of truth
+- a model-assisted synthesis layer that turns recent evidence into smarter tactical summaries
 
-- grid canvas
-- optional top app bar for workspace-level controls
-- optional shared detail area only if it does not compete with the grid
-- floating probe layer
+The deterministic baseline pipeline should:
 
-The grid is always the dominant region.
+- strip control sequences
+- segment recent PTY output into chunks
+- classify chunks into likely narrative text, command text, tool output, prompts, and noise
+- correlate chunks with process launches, exits, and file activity
+- derive structured recent evidence from those observations
 
-### Tile Anatomy
+The model-assisted layer should selectively help with:
 
-Each tile has five parts:
+- choosing the most important tactical fragment to surface on a card
+- compressing noisy recent activity into one useful summary instead of several mediocre ones
+- synthesizing visible narrative with observed execution into a concise alignment or mismatch judgment
+- turning raw evidence into a battle-card presentation that feels intelligent rather than mechanical
 
-1. Header
-2. Terminal body
-3. Lightweight status strip
-4. Focus/selection affordance
-5. Probe anchor affordance
+The model-assisted layer should not be responsible for:
 
-#### Header
+- basic status derivation
+- idle timing
+- raw process or file observation
+- pretending to know more than the evidence supports
+- inventing hidden reasoning or private model state
 
-The header is one line tall in the normal state.
+If model synthesis is unavailable, the product must still function using deterministic evidence only. However, the intended north star experience assumes model assistance for better tactical summarization.
 
-Header contents:
+Model calls should be:
 
-- session name
-- agent label or launch profile
-- current high-level status
-- optional short dominant-process label
-- minimal probe controls
+- driven by meaningful evidence changes, not constant repaints
+- aggressively cached
+- bounded to a small recent evidence window
+- conservative about confidence
 
-The header should never expand into multiline diagnostics in the default view.
+## Command-Level Visibility
 
-#### Terminal Body
+A core promise of Exaterm is that the operator can see under the covers when needed without leaving the main grid.
 
-The terminal body is the primary surface and occupies most of the tile.
+Important signals include:
 
-Requirements:
+- active command
+- recently launched subprocesses
+- dominant subprocess
+- grouped work output from child tools
+- meaningful stderr
+- recent file writes
+- recent file creations or renames
+- high-signal events like retries, failures, quiet periods, or input prompts
 
-- show the real embedded terminal
-- preserve the agent's native keyboard-driven UX
-- avoid overlays that permanently cover meaningful terminal area
-- allow focus to transfer cleanly into the terminal surface
+The UI should show enough of this by default to let the operator verify whether the session is progressing in reality, not just in rhetoric.
 
-#### Lightweight Status Strip
+## Recent Terminal Narrative
 
-The status strip gives glanceable signals without becoming a dashboard.
+The product should still preserve recent terminal-visible narrative because it helps the operator understand the agent's intent and reasoning style.
 
-Candidate fields:
+However, this should be treated as visible terminal narrative, not hidden reasoning.
 
-- status chip
-- elapsed runtime
-- recent event summary
-- last operator action
+The UX should prefer wording such as:
 
-At most one short recent-event line should be visible by default.
+- recent intent
+- recent narrative
+- stated next step
+- visible terminal summary
 
-#### Selection and Probe Affordances
+and avoid claiming access to private reasoning that the product does not in fact possess.
 
-Each tile must clearly show:
+When a model is used to synthesize card copy, that synthesis should still be grounded in visible terminal narrative and observed evidence rather than implied private reasoning.
 
-- whether it is selected
-- whether it has one or more open probes
-- which probe, if any, currently has focus
+## Detail Model
 
-Probe affordances should remain compact until hover or selection.
+The default expectation is that most useful supervision happens inside battle cards.
 
-### Tile Status Model
+If a secondary detail surface exists, it should be an escalation path, not the core model.
 
-Session status is intentionally coarse and operator-facing.
+Possible uses for a deeper detail view:
 
-Primary statuses:
+- full combined subprocess output
+- longer recent terminal window
+- extended event timeline
+- richer process tree
 
-- Running
-- Waiting
-- Attention
-- Blocked
-- Failed
-- Complete
-- Detached
-
-Definitions:
-
-- `Running`: terminal activity or process activity indicates active work
-- `Waiting`: session is live but currently quiet or awaiting external progress
-- `Attention`: heuristic signal suggests operator review is useful soon
-- `Blocked`: likely waiting on user input, permission, or a failed dependency
-- `Failed`: the session or main launched activity exited unexpectedly or entered a clear error condition
-- `Complete`: the intended run appears finished
-- `Detached`: session process state is unavailable or the terminal backend disconnected
-
-Status assignment should be explainable from observable evidence. Avoid false precision.
-
-### Probe Anatomy
-
-Every probe has:
-
-- title bar
-- source-tile indicator
-- lens selector or lens label
-- probe content area
-- close control
-- optional pin state
-- optional follow/freeze control
-
-#### Title Bar
-
-The title bar should include:
-
-- source session name
-- current lens
-- pinned or transient state
-- close button
-
-#### Source-Tile Indicator
-
-The relationship between probe and source tile must remain obvious.
-
-Possible mechanisms:
-
-- shared accent color
-- session badge repeated on both tile and probe
-- subtle anchor line or directional notch
-- highlight ring on source tile while probe is focused
-
-At least two of these should be used so the linkage survives visual clutter.
-
-#### Probe Content Area
-
-Probe content is optimized for inspection, not control density.
-
-Each lens should emphasize:
-
-- readability
-- live updating
-- quick orientation
-- low-friction dismissal
-
-## Probe Types
-
-### Stdout Probe
-
-Purpose: inspect live session output or controlled main-process output without switching the tile away from the terminal.
-
-Contents:
-
-- live scrolling text view
-- timestamp toggle
-- auto-follow toggle
-- pause/freeze control
-- simple find/filter
-
-Behavior:
-
-- default is follow-on
-- operator can freeze scroll without stopping capture
-- if "main process stdout" cannot be guaranteed, label the content as session output
-
-### Process Tree Probe
-
-Purpose: inspect the current subprocess structure and identify runaway, blocked, or unexpected child processes.
-
-Contents:
-
-- parent-child process tree
-- pid
-- command
-- state
-- start time or duration
-- resource summary if cheap to obtain
-
-Behavior:
-
-- tree updates live
-- recent process births and exits are highlighted briefly
-- selecting a process may reveal a small inline detail row, but v1 should avoid turning this into a full system monitor
-
-### Events Probe
-
-Purpose: show a compact timeline of meaningful session events.
-
-Candidate event classes:
-
-- session launched
-- process spawned
-- process exited
-- quiet period detected
-- likely prompt-for-input detected
-- failure signature detected
-- probe opened or pinned
-- operator intervened
-
-Behavior:
-
-- newest events appear at top by default
-- event items should be short and scannable
-- each event should make clear whether it is derived from observation or known with certainty
-
-## Probe Modes
-
-### Peek Probe
-
-A peek probe is transient.
-
-Properties:
-
-- opens quickly near the source tile
-- intended for short inspection
-- closes with `Esc`, close button, or focus-dismiss behavior if enabled
-- should not alter the overall layout
-
-### Pinned Probe
-
-A pinned probe persists until closed explicitly.
-
-Properties:
-
-- remains visible while the operator works elsewhere
-- can be repositioned and resized
-- survives tile focus changes
-- may be restored on app restart if session restoration exists
-
-Pinned probes are for watch tasks, not for replacing the grid.
-
-## Core Behaviors
-
-### Open Probe
-
-Open triggers:
-
-- click probe button on tile
-- keyboard shortcut on selected tile
-- context menu action
-
-Default behavior:
-
-- open as a peek probe
-- place near source tile
-- give the probe focus
-- visually link it to the source tile
-
-If the same lens is already open as a probe for that session:
-
-- focus the existing probe instead of opening duplicates by default
-
-### Close Probe
-
-Close triggers:
-
-- close button
-- `Esc` for peek probe
-- command palette or keyboard close action
-
-Closing a probe:
-
-- removes the overlay
-- returns focus to the source tile if the probe had focus
-- removes source highlighting tied to the probe
-
-### Pin Probe
-
-Pinning converts a transient probe into a persistent one.
-
-Pin behavior:
-
-- preserve position and size
-- keep source linkage visible
-- remove auto-dismiss behaviors
-
-### Focus Behavior
-
-There are three distinct focus targets:
-
-- selected tile
-- active terminal within the selected tile
-- active probe
-
-Rules:
-
-- a tile can be selected without terminal input focus
-- probe focus never hides which tile remains the source
-- switching focus between tile and probe should not surprise the terminal app
-- returning from probe to terminal should be a single action
-
-### Tile Lens Switching
-
-Tiles may support temporary lens switching when the operator wants the tile itself to show something other than the terminal.
-
-Rules:
-
-- TUI remains the default lens
-- switching away from TUI is reversible in one step
-- alternate tile lenses are temporary and should not be sticky across sessions by default
-- lens switching should not be required for normal inspection if probes are available
-
-Tile lens switching is secondary to probes, not a substitute for them.
+But the north star is clear: battle cards should carry the default supervisory burden.
 
 ## Interaction Model
 
-### Mouse
+The interaction loop should be:
 
-Mouse expectations:
+1. scan the grid
+2. identify the session needing attention
+3. inspect the card's tactical presentation and evidence
+4. optionally expand or enrich the selected session without relying on on-card buttons
+5. click the session to promote it front and center into pure-terminal intervention view if direct control is required
+6. return to the battlefield view without losing orientation
 
-- click tile to select
-- click terminal area to focus terminal input
-- click probe button to open probe
-- drag probe by title bar
-- resize probe by edges or corners
-- click close button to dismiss
-- click pin button to persist
+Mouse and keyboard support should both preserve this loop.
 
-Double-click should not be required for core actions.
+Required capabilities:
 
-### Keyboard
-
-Keyboard must support fast supervision without heavy mouse dependence.
-
-Required actions:
-
-- move selection across tiles
-- focus selected tile terminal
-- open probe for current lens
-- cycle probe lens
-- pin/unpin probe
-- close focused probe
-- jump from focused probe back to source tile
-- cycle sessions needing attention
-
-Suggested defaults:
-
-- arrow keys or `hjkl` for tile navigation
-- `Enter` to focus terminal
-- `p` to open default probe
-- `1` `2` `3` to open specific lenses
-- `Tab` to cycle focus between tile and probe
-- `Esc` to close peek probe or leave terminal focus
-
-Exact bindings can change, but the model should preserve one-step transitions between scan, inspect, and intervene.
+- move between sessions quickly
+- focus a selected session
+- expand a selected card
+- enter the real terminal in one action by clicking the card itself
+- promote a session into a centered, dynamically sized intervention view
+- return from intervention back to the grid cleanly
+- cycle attention-worthy sessions
 
 ## Main User Flows
 
-### 1. Scan the Grid
+### 1. Scan the Battlefield
 
-Goal: identify which session deserves attention first.
-
-Flow:
-
-1. Operator sees the full grid of live sessions.
-2. Each tile shows native terminal content plus compact status signals.
-3. Sessions with `Attention`, `Blocked`, or `Failed` stand out visually.
-4. Operator selects the most urgent session.
-
-Success criteria:
-
-- no probe is needed for first-pass prioritization
-- tile chrome is enough to rank urgency
-
-### 2. Inspect a Session Quickly
-
-Goal: understand what is happening without leaving the grid.
+Goal: understand what all agents are doing and decide where attention belongs first.
 
 Flow:
 
-1. Operator selects a tile.
-2. Operator opens a peek probe.
-3. Probe appears near the source tile with clear visual linkage.
-4. Operator inspects stdout, events, or process tree.
-5. Operator closes the probe and returns to the grid.
+1. Operator sees 4 to 8 battle cards.
+2. Cards show status, recency, tactical state, and high-signal evidence fragments.
+3. Idle, blocked, failed, and suspicious mismatch states stand out.
+4. Operator selects the session that deserves attention first.
 
 Success criteria:
 
-- inspection takes one or two actions
-- the source tile remains visually obvious
-- returning to the grid is instant
+- no deep drill-down is needed for first-pass prioritization
+- the operator can tell what all agents are roughly doing from the main grid
+- the operator can spot idleness and mismatch immediately
+- a newly idle session is obvious within a fast scan of the grid
 
-### 3. Watch Output While Supervising Others
+### 2. Verify Claimed Progress
 
-Goal: keep monitoring one session while continuing broader supervision.
+Goal: check whether the agent's visible narrative matches reality.
 
 Flow:
 
-1. Operator opens a stdout probe on a session of interest.
-2. Operator pins the probe.
-3. Probe remains visible while the operator navigates other tiles.
-4. Operator closes the probe when the watch task ends.
+1. Operator notices a card claiming progress.
+2. The card also shows subprocess, file, and output evidence.
+3. Operator checks whether the evidence aligns with the narrative.
+4. Operator either leaves the session alone or escalates attention.
 
 Success criteria:
 
-- the pinned probe does not force a layout switch
-- the operator can still navigate the grid efficiently
+- mismatch between claim and reality is easy to spot
+- the operator can trust the card enough to avoid unnecessary intervention
 
-### 4. Investigate a Suspicious Subprocess
+### 3. Detect Suspicious Idleness
 
-Goal: determine whether the session launched an unexpected or stuck child process.
+Goal: determine whether an idle agent is harmlessly waiting or has stalled.
 
 Flow:
 
-1. Operator selects a tile showing `Blocked` or `Attention`.
-2. Operator opens the process tree probe.
-3. Operator inspects recent child process changes and current tree shape.
-4. Operator decides whether to intervene in the terminal.
+1. A card enters `Idle`.
+2. The card shows idle age and recent preceding activity.
+3. The operator checks whether the session is waiting on a known long-running command, external dependency, or input prompt.
+4. The operator decides whether to intervene.
 
 Success criteria:
 
-- the process tree is readable enough to reveal structure quickly
-- no deep integration with the agent is required
+- idle detection is prominent
+- the operator can distinguish waiting from suspicious inactivity
 
-### 5. Intervene in the Native TUI
+### 4. Inspect Under-the-Covers Activity
 
-Goal: provide input or corrective action directly in the real agent terminal.
+Goal: understand what is happening beneath the agent's visible transcript.
 
 Flow:
 
-1. Operator identifies a session requiring input.
-2. Operator closes or background-leaves any probe.
-3. Operator focuses the session terminal.
-4. Operator interacts directly with the embedded native TUI.
+1. Operator selects a card or otherwise marks it as the current subject.
+2. The card expands in place or gains richer density without requiring visible on-card buttons.
+3. The operator reviews active commands, subprocesses, file writes, and recent work-output excerpts.
+4. The operator decides whether the session is healthy, confused, blocked, or failing.
 
 Success criteria:
 
-- intervention always happens in the real terminal surface
-- no custom abstraction stands between operator and agent
+- deeper operational context is available without abandoning the battlefield view
+- the UI reveals what the machine is doing, not only what the agent says
+
+### 5. Intervene in the Native Terminal
+
+Goal: provide direct input or corrective action using the real agent interface.
+
+Flow:
+
+1. Operator clicks the session needing intervention.
+2. That session is promoted front and center into a focused intervention view.
+3. The real terminal is shown at a comfortable working size with surrounding clutter minimized.
+4. Operator types directly into the embedded native TUI.
+5. Operator returns to the battle card grid after intervention.
+
+Success criteria:
+
+- intervention always happens in the real terminal
+- the promoted terminal view is large enough to work comfortably
+- the operator does not feel trapped in a cluttered split view while intervening
+- no custom abstraction sits between the operator and the agent when direct control is needed
 
 ## Visual Guidance
 
-### Status Signaling
+### General Feel
 
-Status should use a compact combination of:
+The interface should feel calm, dense, and operational.
+
+It should not feel like:
+
+- 8 tiny terminals fighting for attention
+- a dashboard with noisy widgets
+- a chat transcript manager
+
+It should feel like:
+
+- a tactical supervision surface
+- a set of concise operational summaries
+- a place where unusual states stand out immediately
+
+### Layout Principles
+
+The visual layout should follow a few hard rules:
+
+- state before prose
+- evidence before decoration
+- consistent card structure across the whole grid
+- equal card sizing in overview mode
+- no default sidebars that compete with the battlefield
+- the grid is for supervision; the promoted terminal is for control
+- no button-heavy card chrome
+- cards should read like tactical states, not labeled reports
+
+The operator should always know where to look first: the cards, then the selected session, then the terminal if intervention is needed.
+
+### State Visibility
+
+State must be readable before the operator reads detailed text.
+
+Every card should communicate state through a compact but unmistakable combination of:
 
 - color
-- label
-- subtle motion only when necessary
+- contrast
+- border or fill treatment
+- status label
+- recency text
+- restrained motion only when justified
 
-Use motion sparingly. Persistent animation across many tiles will become noise.
+The states `Idle`, `Thinking`, `Working`, `Blocked`, and `Failed` should not blur together. The operator should be able to identify them with peripheral vision.
+
+### State Hierarchy
+
+Suggested visual hierarchy:
+
+- `Idle`: highest routine salience; this should catch the eye because it often signals that operator attention may now be useful
+- `Failed`: strongest error treatment; unmistakable and severe
+- `Blocked`: urgent but different from failure; should suggest "needs input" rather than "crashed"
+- `Working`: positive forward-motion treatment; visible but calm
+- `Thinking`: live-but-pre-execution treatment; present and readable, but deliberately quieter than working
+
+`Idle` should not look like a muted or forgotten state. It should look like a live session that has stopped progressing and may now deserve attention.
 
 ### Density
 
-The grid should tolerate many sessions without collapsing into unreadable dashboards.
+Density should favor supervisory signal over decorative chrome.
 
-Default density guidance:
+Default rules:
 
-- prioritize terminal body area over chrome
 - keep labels short
-- prefer one-line summaries
-- make probes carry the deeper detail load
+- make recency and status obvious
+- surface command-level information early
+- keep output excerpts compact and high-signal
+- avoid making the operator hunt for idle or blocked states
+- avoid rendering the information model literally as stacked `Intent` / `Reality` / `Output` rows on every card
 
-### Empty and Small States
+At overview density, state treatment matters more than decorative richness. If space is limited, preserve the state signal and idle recency before preserving additional narrative detail.
 
-When tile size is constrained:
+The card should feel like a compressed tactical surface, not a miniature terminal, not a mini dashboard, and not a structured report template.
 
-- preserve the terminal surface first
-- collapse secondary labels
-- keep the status signal and session identity visible
+### Motion
 
-When no probes are open:
+Use motion sparingly.
 
-- the grid should look clean and calm
+Motion may help with:
 
-## Error and Edge Cases
+- newly idle sessions
+- newly failed sessions
+- newly blocked sessions
+- recently changed attention state
 
-### Probe Placement Conflicts
+Persistent animation across many cards will become noise.
 
-If opening a probe near a tile would render it mostly off-screen:
+Recommended rule: motion should be event-based and decay quickly. A newly idle card may pulse or brighten briefly, then settle into a strong static idle treatment.
 
-- shift it inward automatically
-- preserve visible source linkage
+### Small States
 
-### Many Pinned Probes
+When space becomes tight:
 
-If multiple probes are pinned:
+- preserve status first
+- preserve recency and idle cues second
+- preserve active command and intent summary third
+- collapse raw terminal visibility before removing supervisory signals
 
-- allow overlap
-- maintain z-order on focus
-- provide a simple "close all probes" action
+### Click Behavior
 
-Do not auto-reflow the whole grid around them in v1.
+Click behavior should be decisive:
 
-### Session Disconnect
+- clicking a card promotes that session front and center into pure-terminal focus mode
+- returning from intervention should restore the original battlefield immediately
 
-If a session backend disconnects:
+Avoid requiring multiple expansion steps before the operator can take control, and avoid forcing the operator to aim for small action buttons inside cards.
 
-- tile enters `Detached`
-- terminal surface freezes with clear state indication
-- probes remain open but show stale-data status
-
-### Ambiguous Observability
-
-If a lens depends on uncertain attribution:
-
-- label the uncertainty directly in the UI
-- prefer "session output" over falsely precise claims
-
-## Engineering Notes
+## Engineering Direction
 
 Recommended implementation direction:
 
 - Rust application
 - GTK4/libadwaita frontend
-- VTE per session tile for real embedded terminals
-- overlay widgets for probes
-- backend for PTY lifecycle, process tracking, and event derivation
+- VTE-backed terminal surfaces for intervention
+- session model for intent, observed activity, and derived status
+- observability adapters for process, output, and file activity
+- battle-card layout system with adaptive density
+- promotion path from battle card to centered terminal intervention view
 
-High-level architectural split:
+High-level architectural areas:
 
 - terminal/session host
-- session model and state derivation
-- probe manager
-- tile/grid layout manager
-- observability adapters
+- event and stream ingestion
+- deterministic activity classifier
+- session-state derivation
+- battle-card presentation model
+- intervention/focus manager
 
 ## V1 Scope
 
 Must-have:
 
-- grid of live embedded terminal sessions
-- compact per-tile status
-- selectable tiles
-- stdout probe
-- process tree probe
-- events probe
-- peek and pinned probe modes
-- clear probe-to-tile linkage
-- keyboard and mouse support for scan, inspect, and intervene
+- adaptive grid of battle cards for 4 to 8 sessions
+- clear per-card status and recency
+- first-class idle detection
+- visible recent intent or narrative summary
+- visible command and subprocess summary
+- visible file activity summary when available
+- visible work-output excerpt
+- one-step transition into the real terminal
+- front-and-center terminal promotion with dynamic sizing
+- keyboard and mouse support for scan and intervene
+- buttonless overview cards where click means intervene
+- hybrid deterministic plus model-assisted tactical summarization
 
 Should-have:
 
-- heuristic `Blocked` and `Attention` signals
-- session event timeline
-- basic persistence of pinned probes and session layout
+- mismatch detection between intent and observed activity
+- grouped work-output view
+- richer test/build progress extraction
+- best-effort file attribution
+- expanded in-place detail state for selected cards
 
 Out of scope for v1:
 
-- deep agent-specific protocol integrations
+- hidden reasoning capture
+- perfect per-subprocess attribution in every environment
+- deep protocol integrations for every agent product
 - IDE-like code navigation
-- orchestration workflows beyond session supervision
-- perfect per-subprocess output attribution
-- dense per-tile dashboards
+- orchestration workflows beyond supervision and intervention
 
 ## Acceptance Criteria
 
 The UX is successful if:
 
-- operators can supervise multiple terminal-native agents without losing the native TUI
-- the grid remains the main working posture
-- deeper inspection happens through probes, not through permanent tile clutter
-- the product delivers useful observability without requiring deep hooks into every agent
-- an operator can scan, inspect, watch, and intervene in one continuous flow
+- operators can supervise 4 to 8 terminal-native agents from one screen
+- operators can understand what each agent is doing without opening every terminal
+- operators can immediately tell when an agent has gone idle
+- `Idle`, `Thinking`, `Working`, `Blocked`, and `Failed` are visually distinct at a glance
+- operators can see enough under-the-covers activity to verify whether claimed progress is real
+- operators can spot mismatch between intent and reality quickly
+- operators can intervene in the native terminal in one step
+- selected sessions can be promoted into a large, uncluttered terminal view for direct control
+- the main grid remains the primary working posture
+- overview cards feel like a dynamic battlefield, not a stack of labeled summaries or pills
