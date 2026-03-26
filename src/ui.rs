@@ -72,6 +72,7 @@ struct AppContext {
     state: Rc<RefCell<WorkspaceState>>,
     title: adw::WindowTitle,
     workspace_summary: gtk::Label,
+    workspace_hint: gtk::Label,
     content_root: gtk::Box,
     cards: gtk::FlowBox,
     battlefield_scroller: gtk::ScrolledWindow,
@@ -118,7 +119,16 @@ fn build_ui(app: &gtk::Application) {
         .margin_top(10)
         .margin_start(18)
         .margin_end(18)
-        .margin_bottom(4)
+        .margin_bottom(2)
+        .build();
+
+    let workspace_hint = gtk::Label::builder()
+        .xalign(0.0)
+        .wrap(true)
+        .css_classes(vec!["workspace-hint".to_string()])
+        .margin_start(18)
+        .margin_end(18)
+        .margin_bottom(8)
         .build();
 
     let focus_title = gtk::Label::builder()
@@ -197,6 +207,7 @@ fn build_ui(app: &gtk::Application) {
         .build();
     content_root.add_css_class("battlefield-root");
     content_root.append(&workspace_summary);
+    content_root.append(&workspace_hint);
     content_root.append(&battlefield_scroller);
     content_root.append(&focus_panel);
 
@@ -218,6 +229,7 @@ fn build_ui(app: &gtk::Application) {
         state: Rc::new(RefCell::new(WorkspaceState::new())),
         title,
         workspace_summary,
+        workspace_hint,
         content_root,
         cards,
         battlefield_scroller,
@@ -614,12 +626,28 @@ fn update_battle_card_widgets(context: &Rc<AppContext>, session: &crate::model::
         .set_label(card_model.primary_detail.as_deref().unwrap_or(""));
     card.detail.set_visible(card_model.primary_detail.is_some());
 
-    let evidence_one = card_model.evidence_fragments.first().map(String::as_str).unwrap_or("");
-    let evidence_two = card_model
+    let evidence_limit = match card_model.status {
+        BattleCardStatus::Idle | BattleCardStatus::Thinking => 1,
+        BattleCardStatus::Working
+        | BattleCardStatus::Blocked
+        | BattleCardStatus::Failed
+        | BattleCardStatus::Complete
+        | BattleCardStatus::Detached => 1,
+    };
+    let evidence_one = card_model
         .evidence_fragments
-        .get(1)
+        .first()
         .map(String::as_str)
         .unwrap_or("");
+    let evidence_two = if evidence_limit > 1 {
+        card_model
+            .evidence_fragments
+            .get(1)
+            .map(String::as_str)
+            .unwrap_or("")
+    } else {
+        ""
+    };
     card.evidence_one.set_label(evidence_one);
     card.evidence_two.set_label(evidence_two);
     card.evidence_one.set_visible(!evidence_one.is_empty());
@@ -634,7 +662,8 @@ fn update_battle_card_widgets(context: &Rc<AppContext>, session: &crate::model::
         SignalTone::Watch => "card-signal-watch",
         SignalTone::Alert => "card-signal-alert",
     });
-    card.alert.set_visible(true);
+    card.alert
+        .set_visible(!matches!(card_model.alignment.tone, SignalTone::Calm));
 }
 
 fn refresh_workspace(context: &Rc<AppContext>) {
@@ -676,6 +705,11 @@ fn refresh_workspace(context: &Rc<AppContext>) {
         "Idle {idle} · Thinking {thinking} · Working {working} · Blocked {blocked} · Failed {failed}"
     ));
     let state = context.state.borrow();
+    context.workspace_hint.set_label(if state.focused_session().is_some() {
+        "Focused terminal below. Click another card to retarget, or press Escape to return to the battlefield."
+    } else {
+        "Battlefield mode. Click any card or press Enter to take direct terminal control."
+    });
     let subtitle = if let Some(session_id) = state.focused_session() {
         let focus_name = state
             .session(session_id)
@@ -968,6 +1002,11 @@ fn load_css() {
             text-transform: uppercase;
         }
 
+        .workspace-hint {
+            color: rgba(189, 204, 219, 0.74);
+            font-size: 12px;
+        }
+
         .battle-card {
             border-radius: 22px;
             border: 1px solid rgba(163, 175, 194, 0.18);
@@ -1009,6 +1048,7 @@ fn load_css() {
         .card-detail {
             color: rgba(221, 229, 238, 0.92);
             font-size: 14px;
+            font-weight: 600;
         }
 
         .card-evidence {

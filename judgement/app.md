@@ -47,6 +47,7 @@ Quality looks like this:
 - Clicking a session for intervention produces a large, comfortable, uncluttered terminal view that feels direct and native.
 - Returning from intervention to the battlefield view is coherent and low-friction.
 - Dense multi-session layouts remain legible at realistic working window sizes.
+- The click-to-intervene gesture is discoverable through ambient cues, selection behavior, or surrounding chrome without resorting to per-card buttons.
 
 Weak quality looks like this:
 
@@ -58,6 +59,7 @@ Weak quality looks like this:
 - The UI shows lots of transcript or chrome but not enough evidence to verify real progress.
 - The cards read like structured summaries with literal `Intent`, `Reality`, or `Output` rows instead of tactical states.
 - Button-heavy card chrome competes with the battlefield scan loop.
+- Whole-card intervention exists in principle but is hard to discover without trial-and-error clicking.
 - Model-assisted copy makes the overview more verbose, repetitive, or noisy instead of sharper.
 - It is difficult to tell whether an agent is actually doing work or only narrating work.
 - The product requires too much clicking or mode-switching to get from scan to diagnosis to intervention.

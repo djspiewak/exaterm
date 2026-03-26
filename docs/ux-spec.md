@@ -294,17 +294,15 @@ The product should converge on cards that read roughly like this:
 
 ```text
 ┌ Agent 3 · Parser Fix                 IDLE · idle 48s ┐
-│ cargo test parser                                         │
-│ Intent: "Now rerunning the parser tests."                 │
-│ Reality: no active subprocesses since last command        │
-│ Files: src/parser.rs, tests/parser.rs                     │
-│ Output: last seen 48s ago · 3 failures                    │
-└ Click to intervene                                        ┘
+│ rerunning parser tests                                    │
+│ quiet after src/parser.rs, tests/parser.rs                │
+│ 3 parser failures still visible                           │
+└────────────────────────────────────────────────────────────┘
 ```
 
 This is the right density target: enough information to decide whether the session is healthy without replaying the entire terminal transcript.
 
-The important point is not the literal labels in the sketch. The real product should aim for cards that inherently answer those questions rather than spelling out a report schema.
+The important point is that the card inherently answers the operator's tactical questions without spelling out a report schema. It should not literally render `Intent`, `Reality`, or `Output` labels unless there is a rare, state-specific reason to do so.
 
 ## Adaptive Density
 
@@ -326,6 +324,8 @@ At overview density, the card should emphasize:
 At this density, the card is optimized for scanning 4 to 8 sessions quickly.
 
 Overview cards should not advertise intervention through explicit inline buttons. The action is implicit in the card itself.
+
+If the product needs to improve discoverability, it should prefer lightweight ambient hints in surrounding chrome or first-run guidance rather than putting buttons or action rows onto the face of every card.
 
 ### Selected Density
 

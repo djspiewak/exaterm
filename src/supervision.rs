@@ -187,7 +187,6 @@ pub fn derive_battle_card_status(
             if observed.idle_seconds.unwrap_or_default() >= 30
                 && observed.active_command.is_none()
                 && observed.dominant_process.is_none()
-                && observed.recent_files.is_empty()
             {
                 BattleCardStatus::Idle
             } else if observed.active_command.is_none()
@@ -243,15 +242,32 @@ fn tactical_copy(
     let mut tactical = match status {
         BattleCardStatus::Idle => TacticalCopy {
             headline: compact_fragment(
-                intent_text
-                    .or(command_text)
-                    .or(output_text)
-                    .unwrap_or("Waiting for the next meaningful step"),
+                if shell_ready {
+                    "Interactive shell ready"
+                } else {
+                    intent_text
+                        .or(command_text)
+                        .or(output_text)
+                        .unwrap_or("Waiting for the next meaningful step")
+                },
             ),
-            primary_detail: output_text
-                .filter(|_| session_status != SessionStatus::Blocked)
-                .map(compact_fragment)
-                .or_else(|| file_text.clone().map(|files| format!("Last touched {files}"))),
+            primary_detail: if shell_ready {
+                Some("Quiet after the terminal became ready for direct intervention".into())
+            } else {
+                file_text
+                    .clone()
+                    .map(|files| format!("Quiet after edits in {files}"))
+                    .or_else(|| {
+                        output_text
+                            .filter(|_| session_status != SessionStatus::Blocked)
+                            .map(|output| format!("Quiet after {}", compact_fragment(output)))
+                    })
+                    .or_else(|| {
+                        intent_text
+                            .filter(|_| observed.idle_seconds.unwrap_or_default() >= 30)
+                            .map(|_| "Waiting to see that step land".into())
+                    })
+            },
             evidence_fragments: Vec::new(),
         },
         BattleCardStatus::Thinking => TacticalCopy {
@@ -288,7 +304,7 @@ fn tactical_copy(
                     .or(intent_text)
                     .unwrap_or("Needs operator input"),
             ),
-            primary_detail: Some("Waiting on an explicit unblock".into()),
+            primary_detail: Some("Operator input is the next move".into()),
             evidence_fragments: Vec::new(),
         },
         BattleCardStatus::Failed => TacticalCopy {
@@ -378,23 +394,23 @@ fn derive_alignment_signal(
 
     match status {
         BattleCardStatus::Blocked => AlignmentSignal {
-            text: "Prompt or explicit unblock is visible".into(),
+            text: "Needs operator input".into(),
             tone: SignalTone::Alert,
         },
         BattleCardStatus::Failed => AlignmentSignal {
-            text: "Failure is explicit in machine output".into(),
+            text: "Failure is machine-confirmed".into(),
             tone: SignalTone::Alert,
         },
         BattleCardStatus::Working if has_files && has_output => AlignmentSignal {
-            text: "Files and output both confirm forward progress".into(),
+            text: "Files + output agree".into(),
             tone: SignalTone::Calm,
         },
         BattleCardStatus::Working if has_files => AlignmentSignal {
-            text: "Recent file changes support the current work".into(),
+            text: "Recent file changes confirm activity".into(),
             tone: SignalTone::Calm,
         },
         BattleCardStatus::Working if has_output || has_runtime => AlignmentSignal {
-            text: "Live runtime evidence supports the current work".into(),
+            text: "Runtime evidence confirms activity".into(),
             tone: SignalTone::Calm,
         },
         BattleCardStatus::Thinking
@@ -406,19 +422,19 @@ fn derive_alignment_signal(
             }
         }
         BattleCardStatus::Thinking if intent.is_some() => AlignmentSignal {
-            text: "Visible planning is ahead of concrete execution".into(),
+            text: "Still planning, not executing".into(),
             tone: SignalTone::Watch,
         },
         BattleCardStatus::Idle if has_files || has_output => AlignmentSignal {
-            text: "Recent evidence exists, but progress has gone quiet".into(),
+            text: "Recently active, now quiet".into(),
             tone: SignalTone::Watch,
         },
         BattleCardStatus::Idle => AlignmentSignal {
-            text: "No concrete execution is visible right now".into(),
+            text: "Quiet with little machine evidence".into(),
             tone: SignalTone::Watch,
         },
         _ => AlignmentSignal {
-            text: "Machine evidence is limited in the overview".into(),
+            text: "Overview evidence is limited".into(),
             tone: SignalTone::Watch,
         },
     }
@@ -672,7 +688,7 @@ mod tests {
             .primary_detail
             .as_deref()
             .unwrap_or_default()
-            .contains("3 parser tests still failing"));
+            .contains("Quiet after 3 parser tests still failing"));
     }
 
     #[test]
@@ -688,5 +704,50 @@ mod tests {
         );
 
         assert_eq!(card.alignment.tone, SignalTone::Alert);
+    }
+
+    #[test]
+    fn idle_card_surfaces_why_quiet_period_matters() {
+        let idle_card = build_battle_card(
+            &record(SessionStatus::Running),
+            &ObservedActivity {
+                idle_seconds: Some(61),
+                recent_files: vec!["src/parser.rs".into(), "tests/parser.rs".into()],
+                work_output_excerpt: Some("3 parser tests still failing".into()),
+                ..Default::default()
+            },
+            &["Now rerunning the parser tests after the last fix.".into()],
+            &DeterministicIntentEngine,
+        );
+
+        assert_eq!(idle_card.status, BattleCardStatus::Idle);
+        assert!(idle_card
+            .primary_detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Quiet after edits in src/parser.rs, tests/parser.rs"));
+        assert_eq!(idle_card.alignment.tone, SignalTone::Watch);
+    }
+
+    #[test]
+    fn idle_shell_card_reads_like_terminal_readiness() {
+        let card = build_battle_card(
+            &record(SessionStatus::Waiting),
+            &ObservedActivity {
+                active_command: Some("Interactive shell ready".into()),
+                idle_seconds: Some(45),
+                ..Default::default()
+            },
+            &[],
+            &DeterministicIntentEngine,
+        );
+
+        assert_eq!(card.status, BattleCardStatus::Idle);
+        assert_eq!(card.headline, "Interactive shell ready");
+        assert!(card
+            .primary_detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Quiet after the terminal became ready"));
     }
 }
