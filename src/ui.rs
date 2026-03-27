@@ -773,6 +773,7 @@ fn build_battle_card_widgets(
         let row = row.clone();
         let session_id = session.id;
         let click = gtk::GestureClick::new();
+        click.set_button(1);
         click.connect_released(move |_, _, _, _| {
             context.cards.select_child(&row);
             context.state.borrow_mut().select_session(session_id);
@@ -807,6 +808,7 @@ fn build_battle_card_widgets(
         .child(&terminal)
         .build();
     terminal_view.add_css_class("terminal-scroll");
+    install_terminal_context_menu(context, &terminal_view, session.id);
 
     SessionCardWidgets {
         row,
@@ -829,6 +831,82 @@ fn build_battle_card_widgets(
         terminal_view,
         terminal,
     }
+}
+
+fn install_terminal_context_menu(
+    context: &Rc<AppContext>,
+    terminal_view: &gtk::ScrolledWindow,
+    source_session: SessionId,
+) {
+    let menu_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(0)
+        .build();
+    let new_terminal_button = gtk::Button::builder()
+        .label("New Terminal Here")
+        .halign(gtk::Align::Fill)
+        .build();
+    new_terminal_button.add_css_class("flat");
+    menu_box.append(&new_terminal_button);
+
+    let popover = gtk::Popover::builder()
+        .has_arrow(true)
+        .autohide(true)
+        .child(&menu_box)
+        .build();
+    popover.set_parent(terminal_view);
+
+    {
+        let context = context.clone();
+        let popover = popover.clone();
+        new_terminal_button.connect_clicked(move |_| {
+            popover.popdown();
+            spawn_new_terminal_here(&context, source_session);
+        });
+    }
+
+    let right_click = gtk::GestureClick::new();
+    right_click.set_button(3);
+    {
+        let popover = popover.clone();
+        right_click.connect_pressed(move |gesture, _, x, y| {
+            let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
+            popover.set_pointing_to(Some(&rect));
+            popover.popup();
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+        });
+    }
+    terminal_view.add_controller(right_click);
+}
+
+fn spawn_new_terminal_here(context: &Rc<AppContext>, source_session: SessionId) {
+    let cwd = context
+        .state
+        .borrow()
+        .session(source_session)
+        .and_then(|session| session.launch.cwd.clone());
+    let number = context.state.borrow().sessions().len() + 1;
+    let mut launch = SessionLaunch::user_shell(
+        format!("Shell {number}"),
+        "Generic command session",
+    );
+    if let Some(cwd) = cwd {
+        launch = launch.with_cwd(cwd);
+    }
+
+    let new_session = append_session_card(context, launch);
+    context.state.borrow_mut().select_session(new_session);
+    if let Some(card) = context.session_cards.borrow().get(&new_session) {
+        context.cards.select_child(&card.row);
+    }
+    refresh_runtime_and_cards(context);
+    refresh_workspace(context);
+    if context.state.borrow().focused_session().is_none() && battlefield_embeds_terminal(context, new_session) {
+        if let Some(card) = context.session_cards.borrow().get(&new_session) {
+            card.terminal.grab_focus();
+        }
+    }
+    refresh_card_styles(context);
 }
 
 fn build_segmented_bar(label: &str) -> SegmentedBarWidgets {
