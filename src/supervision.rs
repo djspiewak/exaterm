@@ -15,6 +15,7 @@ pub struct IntentSummary {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BattleCardStatus {
     Idle,
+    Stopped,
     Active,
     Thinking,
     Working,
@@ -28,6 +29,7 @@ impl BattleCardStatus {
     pub fn label(self) -> &'static str {
         match self {
             BattleCardStatus::Idle => "Idle",
+            BattleCardStatus::Stopped => "Stopped",
             BattleCardStatus::Active => "Active",
             BattleCardStatus::Thinking => "Thinking",
             BattleCardStatus::Working => "Working",
@@ -287,6 +289,19 @@ fn tactical_copy(
                             .map(|_| "Waiting to see that step land".into())
                     })
             },
+            evidence_fragments: Vec::new(),
+        },
+        BattleCardStatus::Stopped => TacticalCopy {
+            headline: compact_fragment(anchor_text),
+            primary_detail: output_text
+                .filter(|output| Some(*output) != Some(anchor_text))
+                .map(|output| format!("Paused after {}", compact_fragment(output)))
+                .or_else(|| {
+                    intent_text
+                        .filter(|intent| Some(*intent) != Some(anchor_text))
+                        .map(|intent| format!("Paused after {}", compact_fragment(intent)))
+                })
+                .or_else(|| Some("Waiting for a simple continue or keep-going nudge".into())),
             evidence_fragments: Vec::new(),
         },
         BattleCardStatus::Active => TacticalCopy {

@@ -1793,7 +1793,7 @@ fn maybe_queue_nudge(
     let Some(summary) = summary else {
         return;
     };
-    if summary.tactical_state != Some(TacticalState::Idle) {
+    if summary.tactical_state != Some(TacticalState::Stopped) {
         return;
     }
     let Some(shell_child_command) = observation.shell_child_command.as_deref() else {
@@ -1941,7 +1941,7 @@ fn gallery_mock_summary(context: &Rc<AppContext>, session_id: SessionId) -> Opti
             intervention_warranted: false,
         },
         "Agent B" => TacticalSynthesis {
-            tactical_state: Some(TacticalState::Idle),
+            tactical_state: Some(TacticalState::Stopped),
             tactical_state_brief: Some("Paused after a clean checkpoint".into()),
             progress_state: Some(ProgressState::WaitingForNudge),
             progress_state_brief: Some("The agent paused after reporting a clean checkpoint".into()),
@@ -2002,7 +2002,7 @@ fn gallery_mock_summary(context: &Rc<AppContext>, session_id: SessionId) -> Opti
         },
         "Agent E" => TacticalSynthesis {
             tactical_state: Some(TacticalState::Idle),
-            tactical_state_brief: Some("Stable after validation".into()),
+            tactical_state_brief: Some("Stable after validation with nothing to resume".into()),
             progress_state: Some(ProgressState::ConvergedWaiting),
             progress_state_brief: Some("Repeated steady status suggests the task is parked cleanly".into()),
             momentum_state: Some(MomentumState::Steady),
@@ -2051,6 +2051,7 @@ fn apply_tactical_synthesis(
     if let Some(tactical_state) = summary.tactical_state {
         card_model.status = match tactical_state {
             TacticalState::Idle => BattleCardStatus::Idle,
+            TacticalState::Stopped => BattleCardStatus::Stopped,
             TacticalState::Active => BattleCardStatus::Active,
             TacticalState::Thinking => BattleCardStatus::Thinking,
             TacticalState::Working => BattleCardStatus::Working,
@@ -2060,7 +2061,7 @@ fn apply_tactical_synthesis(
             TacticalState::Detached => BattleCardStatus::Detached,
         };
         card_model.recency_label = match card_model.status {
-            BattleCardStatus::Idle => card_model.recency_label,
+            BattleCardStatus::Idle | BattleCardStatus::Stopped => card_model.recency_label,
             _ if card_model.recency_label.starts_with("idle ") => "active now".into(),
             _ => card_model.recency_label,
         };
@@ -2199,7 +2200,7 @@ fn decayed_momentum_fill(
     let mut fill = base_fill;
     let should_decay = matches!(
         summary.tactical_state,
-        Some(TacticalState::Idle | TacticalState::Blocked)
+        Some(TacticalState::Stopped | TacticalState::Blocked)
     ) || matches!(summary.momentum_state, Some(MomentumState::Stalled));
 
     if should_decay {
@@ -2250,6 +2251,7 @@ fn refresh_workspace(context: &Rc<AppContext>) {
             .status;
             match status {
                 BattleCardStatus::Idle => idle += 1,
+                BattleCardStatus::Stopped => active += 1,
                 BattleCardStatus::Active
                 | BattleCardStatus::Thinking
                 | BattleCardStatus::Working => active += 1,
@@ -2600,6 +2602,7 @@ fn reparent_widget_to_box<W: IsA<gtk::Widget>>(widget: &W, target: &gtk::Box) {
 fn apply_battle_status_style(label: &gtk::Label, status: BattleCardStatus) {
     for css in [
         "battle-idle",
+        "battle-stopped",
         "battle-active",
         "battle-thinking",
         "battle-working",
@@ -2613,6 +2616,7 @@ fn apply_battle_status_style(label: &gtk::Label, status: BattleCardStatus) {
 
     label.add_css_class(match status {
         BattleCardStatus::Idle => "battle-idle",
+        BattleCardStatus::Stopped => "battle-stopped",
         BattleCardStatus::Active => "battle-active",
         BattleCardStatus::Thinking => "battle-thinking",
         BattleCardStatus::Working => "battle-working",
@@ -2624,9 +2628,16 @@ fn apply_battle_status_style(label: &gtk::Label, status: BattleCardStatus) {
 }
 
 fn status_chip_label(status: BattleCardStatus, recency_label: &str) -> String {
-    if matches!(status, BattleCardStatus::Idle) && recency_label.starts_with("idle ") {
+    if matches!(status, BattleCardStatus::Idle | BattleCardStatus::Stopped)
+        && recency_label.starts_with("idle ")
+    {
         let seconds = recency_label.trim_start_matches("idle ").trim();
-        return format!("IDLE - {seconds}");
+        let label = match status {
+            BattleCardStatus::Idle => "IDLE",
+            BattleCardStatus::Stopped => "STOPPED",
+            _ => unreachable!(),
+        };
+        return format!("{label} - {seconds}");
     }
 
     status.label().to_string()
@@ -2635,6 +2646,7 @@ fn status_chip_label(status: BattleCardStatus, recency_label: &str) -> String {
 fn apply_battle_card_surface_style(frame: &gtk::Frame, status: BattleCardStatus) {
     for css in [
         "card-idle",
+        "card-stopped",
         "card-active",
         "card-thinking",
         "card-working",
@@ -2648,6 +2660,7 @@ fn apply_battle_card_surface_style(frame: &gtk::Frame, status: BattleCardStatus)
 
     frame.add_css_class(match status {
         BattleCardStatus::Idle => "card-idle",
+        BattleCardStatus::Stopped => "card-stopped",
         BattleCardStatus::Active => "card-active",
         BattleCardStatus::Thinking => "card-thinking",
         BattleCardStatus::Working => "card-working",
@@ -2977,6 +2990,11 @@ fn load_css() {
         }
 
         .card-idle {
+            background: linear-gradient(180deg, rgba(23, 27, 33, 0.98) 0%, rgba(13, 16, 21, 0.97) 100%);
+            border-color: rgba(148, 163, 184, 0.24);
+        }
+
+        .card-stopped {
             background: linear-gradient(180deg, rgba(60, 48, 12, 0.98) 0%, rgba(26, 23, 10, 0.97) 100%);
             border-color: rgba(250, 204, 21, 0.42);
         }
@@ -2997,8 +3015,8 @@ fn load_css() {
         }
 
         .card-blocked {
-            background: linear-gradient(180deg, rgba(58, 31, 12, 0.98) 0%, rgba(28, 17, 10, 0.97) 100%);
-            border-color: rgba(251, 146, 60, 0.38);
+            background: linear-gradient(180deg, rgba(61, 20, 24, 0.98) 0%, rgba(30, 12, 16, 0.97) 100%);
+            border-color: rgba(248, 113, 113, 0.38);
         }
 
         .card-failed {
@@ -3017,6 +3035,12 @@ fn load_css() {
         }
 
         .battle-idle {
+            color: #cbd5e1;
+            background: rgba(71, 85, 105, 0.18);
+            border-color: rgba(148, 163, 184, 0.22);
+        }
+
+        .battle-stopped {
             color: #fde68a;
             background: rgba(120, 87, 10, 0.22);
             border-color: rgba(250, 204, 21, 0.28);
@@ -3041,9 +3065,9 @@ fn load_css() {
         }
 
         .battle-blocked {
-            color: #fdba74;
-            background: rgba(108, 58, 14, 0.24);
-            border-color: rgba(251, 146, 60, 0.24);
+            color: #fca5a5;
+            background: rgba(114, 28, 35, 0.24);
+            border-color: rgba(248, 113, 113, 0.24);
         }
 
         .battle-failed {
