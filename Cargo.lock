@@ -132,19 +132,37 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 name = "exaterm"
 version = "0.1.0"
 dependencies = [
+ "exaterm-core",
  "gio",
  "glib",
  "gtk4",
  "libadwaita",
  "libc",
  "portable-pty",
- "proc-macro-crate",
+ "serde",
+ "serde_json",
+ "system-deps",
+ "vte4",
+]
+
+[[package]]
+name = "exaterm-core"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "libc",
+ "portable-pty",
  "reqwest",
  "serde",
  "serde_json",
  "strip-ansi-escapes",
- "system-deps",
- "vte4",
+]
+
+[[package]]
+name = "exatermd"
+version = "0.1.0"
+dependencies = [
+ "exaterm-core",
 ]
 
 [[package]]
