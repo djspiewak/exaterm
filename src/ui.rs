@@ -791,7 +791,7 @@ fn build_battle_card_widgets(
     }
 
     let terminal = vte::Terminal::builder()
-        .scroll_on_output(true)
+        .scroll_on_output(false)
         .scroll_on_keystroke(true)
         .input_enabled(true)
         .hexpand(true)
