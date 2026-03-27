@@ -2,9 +2,11 @@ use crate::model::{
     SessionId, SessionKind, SessionLaunch, WorkspaceState,
 };
 use crate::synthesis::{
-    name_signature, suggest_name_blocking, summary_signature, summarize_blocking, MismatchLevel,
-    MomentumState, NameSuggestion, NamingEvidence, OpenAiNamingConfig, OpenAiSynthesisConfig,
-    OperatorAction, ProgressState, RiskPosture, TacticalEvidence, TacticalState, TacticalSynthesis,
+    name_signature, nudge_signature, suggest_name_blocking, suggest_nudge_blocking,
+    summary_signature, summarize_blocking, MismatchLevel, MomentumState, NameSuggestion,
+    NamingEvidence, NudgeEvidence, NudgeSuggestion, OpenAiNamingConfig, OpenAiNudgeConfig,
+    OpenAiSynthesisConfig, OperatorAction, ProgressState, RiskPosture, TacticalEvidence,
+    TacticalState, TacticalSynthesis,
 };
 use crate::supervision::{
     build_battle_card, BattleCardStatus, DeterministicIntentEngine, ObservedActivity, SignalTone,
@@ -53,6 +55,8 @@ struct SessionCardWidgets {
     frame: gtk::Frame,
     title: gtk::Label,
     status: gtk::Label,
+    nudge_row: gtk::Box,
+    nudge_state: gtk::Label,
     recency: gtk::Label,
     middle_stack: gtk::Stack,
     scrollback_band: gtk::Box,
@@ -73,8 +77,9 @@ struct SessionCardWidgets {
 struct SessionObservation {
     last_change: Instant,
     recent_lines: Vec<String>,
-    terminal_activity: Vec<String>,
+    terminal_activity: Vec<TerminalActivityEntry>,
     painted_line: Option<String>,
+    shell_child_command: Option<String>,
     active_command: Option<String>,
     dominant_process: Option<String>,
     process_tree_excerpt: Option<String>,
@@ -84,6 +89,11 @@ struct SessionObservation {
     file_fingerprints: BTreeMap<PathBuf, (u64, u64)>,
 }
 
+struct TerminalActivityEntry {
+    at: Instant,
+    text: String,
+}
+
 impl SessionObservation {
     fn new() -> Self {
         Self {
@@ -91,6 +101,7 @@ impl SessionObservation {
             recent_lines: Vec::new(),
             terminal_activity: Vec::new(),
             painted_line: None,
+            shell_child_command: None,
             active_command: None,
             dominant_process: None,
             process_tree_excerpt: None,
@@ -124,6 +135,23 @@ struct NamingResult {
     suggestion: Result<NameSuggestion, String>,
 }
 
+struct NudgeWorker {
+    requests: mpsc::Sender<NudgeJob>,
+    responses: mpsc::Receiver<NudgeResult>,
+}
+
+struct NudgeJob {
+    session_id: SessionId,
+    signature: String,
+    evidence: NudgeEvidence,
+}
+
+struct NudgeResult {
+    session_id: SessionId,
+    signature: String,
+    suggestion: Result<NudgeSuggestion, String>,
+}
+
 struct SummaryJob {
     session_id: SessionId,
     signature: String,
@@ -154,9 +182,22 @@ struct NamingCacheEntry {
     in_flight: bool,
 }
 
+struct NudgeCacheEntry {
+    enabled: bool,
+    hovered: bool,
+    completed_signature: Option<String>,
+    requested_signature: Option<String>,
+    last_nudge: Option<String>,
+    last_error: Option<String>,
+    last_attempt: Option<Instant>,
+    last_sent: Option<Instant>,
+    in_flight: bool,
+}
+
 struct SessionRuntime {
     resize_target: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     display_resize_target: Option<Arc<Mutex<File>>>,
+    input_writer: Option<Arc<Mutex<File>>>,
     events: mpsc::Receiver<RuntimeEvent>,
     last_size: Option<(u16, u16)>,
 }
@@ -197,11 +238,29 @@ impl NamingCacheEntry {
     }
 }
 
+impl NudgeCacheEntry {
+    fn new() -> Self {
+        Self {
+            enabled: false,
+            hovered: false,
+            completed_signature: None,
+            requested_signature: None,
+            last_nudge: None,
+            last_error: None,
+            last_attempt: None,
+            last_sent: None,
+            in_flight: false,
+        }
+    }
+}
+
 struct FocusWidgets {
     panel: gtk::Box,
     frame: gtk::Frame,
     title: gtk::Label,
     status: gtk::Label,
+    nudge_row: gtk::Box,
+    nudge_state: gtk::Label,
     alert: gtk::Label,
     terminal_slot: gtk::Box,
     bars: gtk::Box,
@@ -231,6 +290,8 @@ struct AppContext {
     summary_cache: RefCell<BTreeMap<SessionId, SummaryCacheEntry>>,
     naming_worker: Option<NamingWorker>,
     naming_cache: RefCell<BTreeMap<SessionId, NamingCacheEntry>>,
+    nudge_worker: Option<NudgeWorker>,
+    nudge_cache: RefCell<BTreeMap<SessionId, NudgeCacheEntry>>,
 }
 
 pub fn run() -> glib::ExitCode {
@@ -337,6 +398,25 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
         .hexpand(true)
         .css_classes(vec!["card-alert".to_string()])
         .build();
+    focus_alert.set_halign(gtk::Align::Fill);
+    focus_alert.set_single_line_mode(true);
+    focus_alert.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    let focus_nudge_state = gtk::Label::builder()
+        .label("AUTONUDGE OFF")
+        .xalign(0.5)
+        .css_classes(vec!["card-control-state".to_string(), "card-control-off".to_string()])
+        .build();
+    focus_nudge_state.set_halign(gtk::Align::End);
+    let focus_nudge_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .hexpand(true)
+        .halign(gtk::Align::Fill)
+        .visible(false)
+        .build();
+    focus_nudge_row.add_css_class("card-control-row");
+    focus_nudge_row.append(&focus_alert);
+    focus_nudge_row.append(&focus_nudge_state);
     let focus_terminal_slot = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .hexpand(true)
@@ -391,7 +471,7 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
         .vexpand(true)
         .build();
     focus_content.append(&focus_header);
-    focus_content.append(&focus_alert);
+    focus_content.append(&focus_nudge_row);
     focus_content.append(&focus_terminal_slot);
     focus_content.append(&focus_bars);
 
@@ -460,6 +540,8 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
             frame: focus_frame,
             title: focus_title,
             status: focus_status,
+            nudge_row: focus_nudge_row,
+            nudge_state: focus_nudge_state,
             alert: focus_alert,
             terminal_slot: focus_terminal_slot,
             bars: focus_bars,
@@ -473,7 +555,11 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
         summary_cache: RefCell::new(BTreeMap::new()),
         naming_worker: spawn_naming_worker(),
         naming_cache: RefCell::new(BTreeMap::new()),
+        nudge_worker: spawn_nudge_worker(),
+        nudge_cache: RefCell::new(BTreeMap::new()),
     });
+
+    install_focus_nudge_pill_interactions(&context, &context.focus.nudge_state);
 
     {
         let cards = context.cards.clone();
@@ -511,6 +597,9 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
             }
 
             if focused_session.is_none() && matches!(key, gdk::Key::Return | gdk::Key::KP_Enter) {
+                if focused_embedded_terminal_session(&context).is_some() {
+                    return glib::Propagation::Proceed;
+                }
                 let selected_session = context.state.borrow().selected_session();
                 if let Some(session_id) = selected_session {
                     if battlefield_embeds_terminal(&context, session_id) {
@@ -720,6 +809,21 @@ fn build_battle_card_widgets(
         .xalign(0.5)
         .css_classes(vec!["card-status".to_string(), "battle-active".to_string()])
         .build();
+    let nudge_state = gtk::Label::builder()
+        .label("AUTONUDGE OFF")
+        .xalign(0.5)
+        .css_classes(vec!["card-control-state".to_string(), "card-control-off".to_string()])
+        .build();
+    nudge_state.set_halign(gtk::Align::End);
+    let nudge_row = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .hexpand(true)
+        .halign(gtk::Align::Fill)
+        .visible(false)
+        .build();
+    nudge_row.add_css_class("card-control-row");
+    nudge_row.append(&nudge_state);
     let recency = gtk::Label::builder()
         .label("recency unknown")
         .xalign(1.0)
@@ -769,6 +873,7 @@ fn build_battle_card_widgets(
     alert.set_halign(gtk::Align::Fill);
     alert.set_single_line_mode(true);
     alert.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    nudge_row.prepend(&alert);
     let momentum_bar = build_segmented_bar("Momentum");
     let risk_bar = build_segmented_bar("Risk");
 
@@ -857,7 +962,7 @@ fn build_battle_card_widgets(
         .vexpand(true)
         .build();
     content.append(&header);
-    content.append(&alert);
+    content.append(&nudge_row);
     content.append(&middle_stack);
     content.append(&footer);
 
@@ -914,6 +1019,22 @@ fn build_battle_card_widgets(
             terminal.copy_clipboard_format(vte::Format::Text);
         }
     });
+    {
+        let context = context.clone();
+        let row = row.clone();
+        let session_id = session.id;
+        let terminal_focus = gtk::EventControllerFocus::new();
+        terminal_focus.connect_enter(move |_| {
+            context.cards.select_child(&row);
+            {
+                let mut state = context.state.borrow_mut();
+                state.select_session(session_id);
+                state.set_terminal_focus(Some(session_id));
+            }
+            refresh_card_styles(&context);
+        });
+        terminal.add_controller(terminal_focus);
+    }
     terminal.add_css_class("terminal-surface");
     let terminal_view = gtk::ScrolledWindow::builder()
         .hexpand(true)
@@ -923,13 +1044,30 @@ fn build_battle_card_widgets(
         .child(&terminal)
         .build();
     terminal_view.add_css_class("terminal-scroll");
-    install_terminal_context_menu(context, &terminal_view, session.id);
+    install_terminal_context_menu(context, &terminal_view, &terminal, session.id);
+    install_nudge_pill_interactions(context, &nudge_state, session.id);
+    {
+        let terminal_for_keys = terminal.clone();
+        let paste_keys = gtk::EventControllerKey::new();
+        paste_keys.connect_key_pressed(move |_, key, _, state| {
+            if matches!(key, gdk::Key::v | gdk::Key::V)
+                && state.contains(gdk::ModifierType::CONTROL_MASK)
+            {
+                terminal_for_keys.paste_clipboard();
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        terminal.add_controller(paste_keys);
+    }
 
     SessionCardWidgets {
         row,
         frame,
         title,
         status,
+        nudge_row,
+        nudge_state,
         recency,
         middle_stack,
         scrollback_band,
@@ -951,12 +1089,25 @@ fn build_battle_card_widgets(
 fn install_terminal_context_menu(
     context: &Rc<AppContext>,
     terminal_view: &gtk::ScrolledWindow,
+    terminal: &vte::Terminal,
     source_session: SessionId,
 ) {
     let menu_box = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
         .build();
+    let copy_button = gtk::Button::builder()
+        .label("Copy")
+        .halign(gtk::Align::Fill)
+        .build();
+    copy_button.add_css_class("flat");
+    menu_box.append(&copy_button);
+    let paste_button = gtk::Button::builder()
+        .label("Paste")
+        .halign(gtk::Align::Fill)
+        .build();
+    paste_button.add_css_class("flat");
+    menu_box.append(&paste_button);
     let split_terminal_button = gtk::Button::builder()
         .label("Add Terminals")
         .halign(gtk::Align::Fill)
@@ -972,6 +1123,24 @@ fn install_terminal_context_menu(
     popover.set_parent(terminal_view);
 
     {
+        let popover = popover.clone();
+        let terminal = terminal.clone();
+        copy_button.connect_clicked(move |_| {
+            terminal.copy_clipboard_format(vte::Format::Text);
+            popover.popdown();
+        });
+    }
+
+    {
+        let popover = popover.clone();
+        let terminal = terminal.clone();
+        paste_button.connect_clicked(move |_| {
+            terminal.paste_clipboard();
+            popover.popdown();
+        });
+    }
+
+    {
         let context = context.clone();
         let popover = popover.clone();
         split_terminal_button.connect_clicked(move |_| {
@@ -984,10 +1153,13 @@ fn install_terminal_context_menu(
     right_click.set_button(3);
     {
         let context = context.clone();
+        let terminal = terminal.clone();
+        let copy_button = copy_button.clone();
         let split_terminal_button = split_terminal_button.clone();
         let popover = popover.clone();
         right_click.connect_pressed(move |gesture, _, x, y| {
             let count = context.state.borrow().sessions().len();
+            copy_button.set_sensitive(terminal.has_selection());
             split_terminal_button.set_sensitive(matches!(count, 1 | 2 | 4 | 6 | 8 | 12));
             let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
             popover.set_pointing_to(Some(&rect));
@@ -996,6 +1168,107 @@ fn install_terminal_context_menu(
         });
     }
     terminal_view.add_controller(right_click);
+}
+
+fn install_nudge_pill_interactions(
+    context: &Rc<AppContext>,
+    pill: &gtk::Label,
+    session_id: SessionId,
+) {
+    let click = gtk::GestureClick::new();
+    click.set_button(1);
+    {
+        let context = context.clone();
+        click.connect_released(move |gesture, _, _, _| {
+            toggle_auto_nudge(&context, session_id);
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+        });
+    }
+    pill.add_controller(click);
+
+    let motion = gtk::EventControllerMotion::new();
+    {
+        let context = context.clone();
+        motion.connect_enter(move |_, _, _| {
+            set_auto_nudge_hover(&context, session_id, true);
+        });
+    }
+    {
+        let context = context.clone();
+        motion.connect_leave(move |_| {
+            set_auto_nudge_hover(&context, session_id, false);
+        });
+    }
+    pill.add_controller(motion);
+}
+
+fn install_focus_nudge_pill_interactions(context: &Rc<AppContext>, pill: &gtk::Label) {
+    let click = gtk::GestureClick::new();
+    click.set_button(1);
+    {
+        let context = context.clone();
+        click.connect_released(move |gesture, _, _, _| {
+            if let Some(session_id) = context.state.borrow().focused_session() {
+                toggle_auto_nudge(&context, session_id);
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+            }
+        });
+    }
+    pill.add_controller(click);
+
+    let motion = gtk::EventControllerMotion::new();
+    {
+        let context = context.clone();
+        motion.connect_enter(move |_, _, _| {
+            if let Some(session_id) = context.state.borrow().focused_session() {
+                set_auto_nudge_hover(&context, session_id, true);
+            }
+        });
+    }
+    {
+        let context = context.clone();
+        motion.connect_leave(move |_| {
+            if let Some(session_id) = context.state.borrow().focused_session() {
+                set_auto_nudge_hover(&context, session_id, false);
+            }
+        });
+    }
+    pill.add_controller(motion);
+}
+
+fn toggle_auto_nudge(context: &Rc<AppContext>, session_id: SessionId) {
+    let enabled = {
+        let mut cache = context.nudge_cache.borrow_mut();
+        let entry = cache
+            .entry(session_id)
+            .or_insert_with(NudgeCacheEntry::new);
+        entry.enabled = !entry.enabled;
+        if !entry.enabled {
+            entry.in_flight = false;
+            entry.requested_signature = None;
+            entry.hovered = false;
+        }
+        entry.enabled
+    };
+    update_nudge_widgets(context, session_id);
+    if enabled {
+        refresh_runtime_and_cards(context);
+    }
+}
+
+fn set_auto_nudge_hover(context: &Rc<AppContext>, session_id: SessionId, hovered: bool) {
+    let changed = {
+        let mut cache = context.nudge_cache.borrow_mut();
+        let entry = cache
+            .entry(session_id)
+            .or_insert_with(NudgeCacheEntry::new);
+        let changed = entry.hovered != hovered;
+        entry.hovered = hovered;
+        changed
+    };
+    if changed {
+        update_nudge_widgets(context, session_id);
+    }
 }
 
 fn split_terminal_here(context: &Rc<AppContext>, source_session: SessionId) {
@@ -1159,10 +1432,20 @@ fn spawn_direct_runtime(
         return Err("agent pty master did not expose a file descriptor".into());
     };
     let foreign_fd = unsafe { libc::dup(master_fd) };
-    if foreign_fd < 0 {
+    let input_fd = unsafe { libc::dup(master_fd) };
+    if foreign_fd < 0 || input_fd < 0 {
+        unsafe {
+            if foreign_fd >= 0 {
+                libc::close(foreign_fd);
+            }
+            if input_fd >= 0 {
+                libc::close(input_fd);
+            }
+        }
         return Err(std::io::Error::last_os_error().to_string());
     }
     let master = unsafe { OwnedFd::from_raw_fd(foreign_fd) };
+    let input_writer = unsafe { File::from_raw_fd(input_fd) };
     let pty = vte::Pty::foreign_sync(master, None::<&gio::Cancellable>)
         .map_err(|error| error.to_string())?;
     terminal.set_pty(Some(&pty));
@@ -1177,6 +1460,7 @@ fn spawn_direct_runtime(
         session_runtime: SessionRuntime {
             resize_target,
             display_resize_target: None,
+            input_writer: Some(Arc::new(Mutex::new(input_writer))),
             events: event_rx,
             last_size: Some((size.rows, size.cols)),
         },
@@ -1214,7 +1498,8 @@ fn spawn_proxy_runtime(
     };
     let agent_reader_fd = unsafe { libc::dup(agent_master_fd) };
     let agent_writer_fd = unsafe { libc::dup(agent_master_fd) };
-    if agent_reader_fd < 0 || agent_writer_fd < 0 {
+    let input_writer_fd = unsafe { libc::dup(agent_master_fd) };
+    if agent_reader_fd < 0 || agent_writer_fd < 0 || input_writer_fd < 0 {
         unsafe {
             if agent_reader_fd >= 0 {
                 libc::close(agent_reader_fd);
@@ -1222,11 +1507,15 @@ fn spawn_proxy_runtime(
             if agent_writer_fd >= 0 {
                 libc::close(agent_writer_fd);
             }
+            if input_writer_fd >= 0 {
+                libc::close(input_writer_fd);
+            }
         }
         return Err(std::io::Error::last_os_error().to_string());
     }
     let mut agent_reader = unsafe { File::from_raw_fd(agent_reader_fd) };
     let mut agent_writer = unsafe { File::from_raw_fd(agent_writer_fd) };
+    let input_writer = unsafe { File::from_raw_fd(input_writer_fd) };
     let resize_target = Arc::new(Mutex::new(pair.master));
     let (display_pty, mut display_reader, mut display_writer, display_resizer) =
         create_display_pty(size)?;
@@ -1250,6 +1539,7 @@ fn spawn_proxy_runtime(
         session_runtime: SessionRuntime {
             resize_target,
             display_resize_target: Some(Arc::new(Mutex::new(display_resizer))),
+            input_writer: Some(Arc::new(Mutex::new(input_writer))),
             events: event_rx,
             last_size: Some((size.rows, size.cols)),
         },
@@ -1576,9 +1866,32 @@ fn spawn_naming_worker() -> Option<NamingWorker> {
     })
 }
 
+fn spawn_nudge_worker() -> Option<NudgeWorker> {
+    let config = OpenAiNudgeConfig::from_env()?;
+    let (request_tx, request_rx) = mpsc::channel::<NudgeJob>();
+    let (result_tx, result_rx) = mpsc::channel::<NudgeResult>();
+
+    thread::spawn(move || {
+        while let Ok(job) = request_rx.recv() {
+            let suggestion = suggest_nudge_blocking(&config, &job.evidence);
+            let _ = result_tx.send(NudgeResult {
+                session_id: job.session_id,
+                signature: job.signature,
+                suggestion,
+            });
+        }
+    });
+
+    Some(NudgeWorker {
+        requests: request_tx,
+        responses: result_rx,
+    })
+}
+
 fn refresh_runtime_and_cards(context: &Rc<AppContext>) {
     drain_summary_results(context);
     drain_naming_results(context);
+    drain_nudge_results(context);
     drain_runtime_events(context);
     sync_runtime_sizes(context);
     update_flowbox_columns(context);
@@ -1619,6 +1932,37 @@ fn drain_naming_results(context: &Rc<AppContext>) {
                         .set_display_name(result.session_id, Some(suggestion.name));
                 }
                 entry.last_error = None;
+            }
+            Err(error) => {
+                entry.last_error = Some(error);
+            }
+        }
+    }
+}
+
+fn drain_nudge_results(context: &Rc<AppContext>) {
+    let Some(worker) = context.nudge_worker.as_ref() else {
+        return;
+    };
+
+    while let Ok(result) = worker.responses.try_recv() {
+        let mut cache = context.nudge_cache.borrow_mut();
+        let entry = cache
+            .entry(result.session_id)
+            .or_insert_with(NudgeCacheEntry::new);
+        entry.in_flight = false;
+        entry.requested_signature = None;
+        entry.last_attempt = Some(Instant::now());
+        match result.suggestion {
+            Ok(suggestion) => {
+                entry.completed_signature = Some(result.signature);
+                entry.last_error = None;
+                entry.last_nudge = (!suggestion.text.is_empty()).then_some(suggestion.text.clone());
+                if !suggestion.text.is_empty()
+                    && send_runtime_input_line(context, result.session_id, &suggestion.text).is_ok()
+                {
+                    entry.last_sent = Some(Instant::now());
+                }
             }
             Err(error) => {
                 entry.last_error = Some(error);
@@ -1707,6 +2051,68 @@ fn resize_display_pty(fd: i32, size: PtySize) -> std::io::Result<()> {
     Ok(())
 }
 
+fn send_runtime_input_line(
+    context: &Rc<AppContext>,
+    session_id: SessionId,
+    line: &str,
+) -> std::io::Result<()> {
+    let writer = {
+        let runtimes = context.runtimes.borrow();
+        runtimes
+            .get(&session_id)
+            .and_then(|runtime| runtime.input_writer.as_ref().cloned())
+    }
+    .ok_or_else(|| std::io::Error::other("session runtime input writer missing"))?;
+
+    let mut bytes = line.as_bytes().to_vec();
+    bytes.push(b'\n');
+    write_runtime_input(&writer, &bytes)
+}
+
+fn write_runtime_input(writer: &Arc<Mutex<File>>, bytes: &[u8]) -> std::io::Result<()> {
+    let mut writer = writer
+        .lock()
+        .map_err(|_| std::io::Error::other("runtime input writer lock poisoned"))?;
+    let mut offset = 0usize;
+
+    while offset < bytes.len() {
+        match writer.write(&bytes[offset..]) {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "short write to runtime input",
+                ))
+            }
+            Ok(n) => offset += n,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                let mut fds = [libc::pollfd {
+                    fd: writer.as_raw_fd(),
+                    events: libc::POLLOUT,
+                    revents: 0,
+                }];
+                let poll_result =
+                    unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, 1000) };
+                if poll_result < 0 {
+                    let poll_error = std::io::Error::last_os_error();
+                    if poll_error.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(poll_error);
+                }
+                if poll_result == 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "timed out waiting to write runtime input",
+                    ));
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(())
+}
+
 fn drain_summary_results(context: &Rc<AppContext>) {
     let Some(worker) = context.summary_worker.as_ref() else {
         return;
@@ -1735,6 +2141,11 @@ fn drain_summary_results(context: &Rc<AppContext>) {
 
 fn refresh_observation(context: &Rc<AppContext>, session: &crate::model::SessionRecord) {
     let remote_mode = matches!(context.mode, RunMode::Ssh { .. });
+    let shell_child_command = if remote_mode {
+        None
+    } else {
+        session.pid.and_then(read_shell_child_command)
+    };
     let dominant_process = if remote_mode {
         None
     } else {
@@ -1751,8 +2162,10 @@ fn refresh_observation(context: &Rc<AppContext>, session: &crate::model::Session
         .entry(session.id)
         .or_insert_with(SessionObservation::new);
     let active_command = infer_active_command_from_lines(&observation.recent_lines)
+        .or(shell_child_command.clone())
         .or(dominant_process.clone())
         .or_else(|| launch_command_hint(&session.launch));
+    observation.shell_child_command = shell_child_command;
     observation.dominant_process = dominant_process;
     observation.active_command = active_command;
     observation.process_tree_excerpt = process_tree_excerpt;
@@ -1821,6 +2234,7 @@ fn update_battle_card_widgets(context: &Rc<AppContext>, session: &crate::model::
     let naming = build_naming_evidence(session, observation);
     maybe_queue_name(context, session.id, &naming);
     let live_summary = current_summary(context, session.id, &evidence);
+    maybe_queue_nudge(context, session, observation, live_summary.as_ref());
     if let Some(summary) = live_summary.clone() {
         card_model = apply_tactical_synthesis(card_model, summary);
     }
@@ -1863,6 +2277,8 @@ fn update_battle_card_widgets(context: &Rc<AppContext>, session: &crate::model::
         .unwrap_or_default();
     card.alert.set_label(&operator_summary);
     card.alert.set_visible(!operator_summary.is_empty());
+    card.nudge_row.set_visible(true);
+    apply_nudge_pill(&context.nudge_cache.borrow(), session.id, &card.nudge_state);
 }
 
 fn build_tactical_evidence(
@@ -1877,7 +2293,9 @@ fn build_tactical_evidence(
         process_tree_excerpt: observation.process_tree_excerpt.clone(),
         recent_files: observation.recent_files.clone(),
         work_output_excerpt: observation.painted_line.clone(),
+        current_time: Some(relative_now_label()),
         idle_seconds: Some(observation.last_change.elapsed().as_secs()),
+        last_update_age: Some(relative_age_label(observation.last_change.elapsed())),
         recent_terminal_activity: synthesis_terminal_activity(observation),
         recent_events: session
             .events
@@ -1903,24 +2321,40 @@ fn build_naming_evidence(
     }
 }
 
-fn synthesis_terminal_activity(observation: &SessionObservation) -> Vec<String> {
-    let mut entries = Vec::new();
-
-    for line in observation
-        .recent_lines
-        .iter()
-        .rev()
-        .take(10)
-        .cloned()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-    {
-        let trimmed = line.trim();
-        if !trimmed.is_empty() {
-            entries.push(format!("[line] {trimmed}"));
-        }
+fn build_nudge_evidence(
+    session: &crate::model::SessionRecord,
+    observation: &SessionObservation,
+    summary: &TacticalSynthesis,
+) -> NudgeEvidence {
+    NudgeEvidence {
+        session_name: effective_display_name(session, observation),
+        shell_child_command: observation.shell_child_command.clone(),
+        idle_seconds: Some(observation.last_change.elapsed().as_secs()),
+        tactical_state_brief: summary.tactical_state_brief.clone(),
+        progress_state_brief: summary.progress_state_brief.clone(),
+        momentum_state_brief: summary.momentum_state_brief.clone(),
+        terse_operator_summary: summary.terse_operator_summary.clone(),
+        recent_terminal_history: nudge_terminal_history(observation),
     }
+}
+
+fn synthesis_terminal_activity(observation: &SessionObservation) -> Vec<String> {
+    const SUMMARY_ACTIVITY_HISTORY_WINDOW: usize = 100;
+
+    let mut entries = Vec::new();
+    let now = Instant::now();
+
+    entries.extend(
+        observation
+            .terminal_activity
+            .iter()
+            .rev()
+            .take(SUMMARY_ACTIVITY_HISTORY_WINDOW)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|entry| format_terminal_activity_entry(entry, now)),
+    );
 
     if let Some(painted) = observation.painted_line.as_deref() {
         let trimmed = painted.trim();
@@ -1933,12 +2367,27 @@ fn synthesis_terminal_activity(observation: &SessionObservation) -> Vec<String> 
 }
 
 fn naming_terminal_history(observation: &SessionObservation) -> Vec<String> {
+    let now = Instant::now();
     observation
         .terminal_activity
         .iter()
         .rev()
         .take(80)
-        .cloned()
+        .map(|entry| format_terminal_activity_entry(entry, now))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
+}
+
+fn nudge_terminal_history(observation: &SessionObservation) -> Vec<String> {
+    let now = Instant::now();
+    observation
+        .terminal_activity
+        .iter()
+        .rev()
+        .take(120)
+        .map(|entry| format_terminal_activity_entry(entry, now))
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
@@ -1996,6 +2445,80 @@ fn maybe_queue_summary(context: &Rc<AppContext>, session_id: SessionId, evidence
         signature,
         evidence: evidence.clone(),
     });
+}
+
+fn maybe_queue_nudge(
+    context: &Rc<AppContext>,
+    session: &crate::model::SessionRecord,
+    observation: &SessionObservation,
+    summary: Option<&TacticalSynthesis>,
+) {
+    if visual_gallery_enabled() {
+        return;
+    }
+
+    let Some(summary) = summary else {
+        return;
+    };
+    if summary.tactical_state != Some(TacticalState::Idle) {
+        return;
+    }
+    let Some(shell_child_command) = observation.shell_child_command.as_deref() else {
+        return;
+    };
+    if !looks_like_coding_agent(shell_child_command) {
+        return;
+    }
+    let idle_seconds = observation.last_change.elapsed().as_secs();
+    if idle_seconds < 20 {
+        return;
+    }
+
+    let Some(worker) = context.nudge_worker.as_ref() else {
+        return;
+    };
+
+    let mut cache = context.nudge_cache.borrow_mut();
+    let entry = cache
+        .entry(session.id)
+        .or_insert_with(NudgeCacheEntry::new);
+    if !entry.enabled || entry.in_flight {
+        return;
+    }
+    if entry
+        .last_sent
+        .is_some_and(|sent| sent.elapsed() < Duration::from_secs(120))
+    {
+        return;
+    }
+    if entry
+        .last_attempt
+        .is_some_and(|attempt| attempt.elapsed() < Duration::from_secs(10))
+    {
+        return;
+    }
+
+    let evidence = build_nudge_evidence(session, observation, summary);
+    let signature = nudge_signature(&evidence);
+    if entry.requested_signature.as_deref() == Some(signature.as_str()) {
+        return;
+    }
+
+    entry.in_flight = true;
+    entry.last_attempt = Some(Instant::now());
+    entry.requested_signature = Some(signature.clone());
+    let _ = worker.requests.send(NudgeJob {
+        session_id: session.id,
+        signature,
+        evidence,
+    });
+}
+
+fn looks_like_coding_agent(command: &str) -> bool {
+    matches!(
+        command,
+        "codex" | "claude" | "claude-code" | "aider" | "opencode" | "goose" | "gemini"
+    )
 }
 
 fn maybe_queue_name(context: &Rc<AppContext>, session_id: SessionId, evidence: &NamingEvidence) {
@@ -2083,7 +2606,6 @@ fn gallery_mock_summary(context: &Rc<AppContext>, session_id: SessionId) -> Opti
             mismatch_level: MismatchLevel::Low,
             mismatch_brief: Some("Narrative and machine evidence line up".into()),
             intervention_warranted: false,
-            momentum: 0.62,
         },
         "Agent B" => TacticalSynthesis {
             tactical_state: Some(TacticalState::Idle),
@@ -2104,7 +2626,6 @@ fn gallery_mock_summary(context: &Rc<AppContext>, session_id: SessionId) -> Opti
             mismatch_level: MismatchLevel::Low,
             mismatch_brief: Some("The pause matches the visible checkpoint".into()),
             intervention_warranted: false,
-            momentum: 0.82,
         },
         "Agent C" => TacticalSynthesis {
             tactical_state: Some(TacticalState::Blocked),
@@ -2125,7 +2646,6 @@ fn gallery_mock_summary(context: &Rc<AppContext>, session_id: SessionId) -> Opti
             mismatch_level: MismatchLevel::Low,
             mismatch_brief: Some("The stop is consistent with the stated boundary".into()),
             intervention_warranted: true,
-            momentum: 0.58,
         },
         "Agent D" => TacticalSynthesis {
             tactical_state: Some(TacticalState::Active),
@@ -2146,7 +2666,6 @@ fn gallery_mock_summary(context: &Rc<AppContext>, session_id: SessionId) -> Opti
             mismatch_level: MismatchLevel::Watch,
             mismatch_brief: Some("The narrative sounds active, but progress is weak".into()),
             intervention_warranted: false,
-            momentum: 0.41,
         },
         "Agent E" => TacticalSynthesis {
             tactical_state: Some(TacticalState::Idle),
@@ -2167,7 +2686,6 @@ fn gallery_mock_summary(context: &Rc<AppContext>, session_id: SessionId) -> Opti
             mismatch_level: MismatchLevel::Low,
             mismatch_brief: Some("The transcript supports a clean stand-by state".into()),
             intervention_warranted: false,
-            momentum: 0.86,
         },
         "Agent F" => TacticalSynthesis {
             tactical_state: Some(TacticalState::Active),
@@ -2188,7 +2706,6 @@ fn gallery_mock_summary(context: &Rc<AppContext>, session_id: SessionId) -> Opti
             mismatch_level: MismatchLevel::Watch,
             mismatch_brief: Some("The transcript still matches the disk-pressure problem, but escalation is concerning".into()),
             intervention_warranted: true,
-            momentum: 0.37,
         },
         _ => return None,
     })
@@ -2328,33 +2845,37 @@ fn momentum_bar_value(
     idle_seconds: Option<u64>,
 ) -> Option<(usize, SignalTone, Option<String>)> {
     if let Some(summary) = summary {
-        let tone = match summary.momentum_state {
-            Some(MomentumState::Strong) => SignalTone::Calm,
-            Some(MomentumState::Steady) | Some(MomentumState::Fragile) => SignalTone::Watch,
-            Some(MomentumState::Stalled) => SignalTone::Alert,
+        let (base_fill, tone) = match summary.momentum_state {
+            Some(MomentumState::Strong) => (4usize, SignalTone::Calm),
+            Some(MomentumState::Steady) => (3usize, SignalTone::Calm),
+            Some(MomentumState::Fragile) => (2usize, SignalTone::Watch),
+            Some(MomentumState::Stalled) => (1usize, SignalTone::Alert),
             None => return None,
         };
-        let effective = decayed_momentum(summary, idle_seconds);
-        let fill = (effective * 4.0).ceil() as usize;
-        return Some((fill.min(4), tone, summary.momentum_state_brief.clone()));
+        let fill = decayed_momentum_fill(base_fill, summary, idle_seconds);
+        return Some((fill, tone, summary.momentum_state_brief.clone()));
     }
     None
 }
 
-fn decayed_momentum(summary: &TacticalSynthesis, idle_seconds: Option<u64>) -> f32 {
-    let mut effective = summary.momentum.clamp(0.0, 1.0);
+fn decayed_momentum_fill(
+    base_fill: usize,
+    summary: &TacticalSynthesis,
+    idle_seconds: Option<u64>,
+) -> usize {
+    let mut fill = base_fill;
     let should_decay = matches!(
         summary.tactical_state,
         Some(TacticalState::Idle | TacticalState::Blocked)
     ) || matches!(summary.momentum_state, Some(MomentumState::Stalled));
 
     if should_decay {
-        let seconds = idle_seconds.unwrap_or_default() as f32;
-        let decay = (1.0 - (seconds / 90.0)).clamp(0.0, 1.0);
-        effective *= decay;
+        let seconds = idle_seconds.unwrap_or_default();
+        let decay_steps = (seconds / 30) as usize;
+        fill = fill.saturating_sub(decay_steps);
     }
 
-    effective.clamp(0.0, 1.0)
+    fill.min(4)
 }
 
 fn risk_bar_value(summary: Option<&TacticalSynthesis>) -> Option<(usize, SignalTone, Option<String>)> {
@@ -2550,6 +3071,12 @@ fn refresh_focus_panel(context: &Rc<AppContext>) {
         .unwrap_or_default();
     context.focus.alert.set_label(&operator_summary);
     context.focus.alert.set_visible(!operator_summary.is_empty());
+    context.focus.nudge_row.set_visible(true);
+    apply_nudge_pill(
+        &context.nudge_cache.borrow(),
+        session.id,
+        &context.focus.nudge_state,
+    );
     context.focus.bars.set_orientation(gtk::Orientation::Horizontal);
     apply_segmented_bar(
         &context.focus.momentum_bar,
@@ -2641,6 +3168,68 @@ fn current_battlefield_columns(context: &Rc<AppContext>) -> usize {
         return 0;
     }
     context.cards.max_children_per_line().max(1) as usize
+}
+
+fn focused_embedded_terminal_session(context: &Rc<AppContext>) -> Option<SessionId> {
+    context.session_cards.borrow().iter().find_map(|(session_id, card)| {
+        (battlefield_embeds_terminal(context, *session_id) && card.terminal.has_focus())
+            .then_some(*session_id)
+    })
+}
+
+fn update_nudge_widgets(context: &Rc<AppContext>, session_id: SessionId) {
+    if let Some(card) = context.session_cards.borrow().get(&session_id) {
+        apply_nudge_pill(&context.nudge_cache.borrow(), session_id, &card.nudge_state);
+    }
+    if context.state.borrow().focused_session() == Some(session_id) {
+        apply_nudge_pill(
+            &context.nudge_cache.borrow(),
+            session_id,
+            &context.focus.nudge_state,
+        );
+    }
+}
+
+fn apply_nudge_pill(
+    cache: &BTreeMap<SessionId, NudgeCacheEntry>,
+    session_id: SessionId,
+    state: &gtk::Label,
+) {
+    let cooldown_active = cache
+        .get(&session_id)
+        .and_then(|entry| entry.last_sent)
+        .is_some_and(|sent| sent.elapsed() < Duration::from_secs(120));
+    let hovered = cache
+        .get(&session_id)
+        .is_some_and(|entry| entry.hovered);
+    let enabled = cache
+        .get(&session_id)
+        .is_some_and(|entry| entry.enabled);
+    let (text, css) = if hovered {
+        if enabled {
+            ("DISARM AUTONUDGE", "card-control-cooldown")
+        } else {
+            ("ARM AUTONUDGE", "card-control-off")
+        }
+    } else if cooldown_active {
+        ("AUTONUDGE COOLDOWN", "card-control-cooldown")
+    } else if enabled {
+        ("AUTONUDGE ARMED", "card-control-armed")
+    } else {
+        ("AUTONUDGE OFF", "card-control-off")
+    };
+
+    for candidate in [
+        "card-control-off",
+        "card-control-armed",
+        "card-control-nudged",
+        "card-control-cooldown",
+    ] {
+        state.remove_css_class(candidate);
+    }
+    state.add_css_class(css);
+    state.set_label(text);
+    state.set_visible(true);
 }
 
 fn sync_terminal_parents(context: &Rc<AppContext>) {
@@ -2750,9 +3339,7 @@ fn append_recent_lines(recent_lines: &mut Vec<String>, candidate_lines: &[String
     }
 }
 
-fn append_terminal_activity(activity: &mut Vec<String>, candidate_lines: &[String]) {
-    let timestamp = timestamp_now_label();
-
+fn append_terminal_activity(activity: &mut Vec<TerminalActivityEntry>, candidate_lines: &[String]) {
     if candidate_lines.is_empty() {
         return;
     }
@@ -2761,7 +3348,7 @@ fn append_terminal_activity(activity: &mut Vec<String>, candidate_lines: &[Strin
         .iter()
         .rev()
         .take(candidate_lines.len())
-        .map(|entry| activity_payload(entry).to_string())
+        .map(|entry| entry.text.clone())
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
@@ -2772,22 +3359,17 @@ fn append_terminal_activity(activity: &mut Vec<String>, candidate_lines: &[Strin
     }
 
     for line in candidate_lines {
-        let entry = format!("[{timestamp}] {}", line.trim());
-        activity.push(entry);
+        activity.push(TerminalActivityEntry {
+            at: Instant::now(),
+            text: line.trim().to_string(),
+        });
     }
 
-    const MAX_ACTIVITY_LINES: usize = 160;
+    const MAX_ACTIVITY_LINES: usize = 320;
     if activity.len() > MAX_ACTIVITY_LINES {
         let extra = activity.len() - MAX_ACTIVITY_LINES;
         activity.drain(0..extra);
     }
-}
-
-fn activity_payload(entry: &str) -> &str {
-    entry
-        .split_once("] ")
-        .map(|(_, payload)| payload)
-        .unwrap_or(entry)
 }
 
 fn effective_display_name(
@@ -2800,12 +3382,21 @@ fn effective_display_name(
         .unwrap_or_else(|| "New Session".into())
 }
 
-fn timestamp_now_label() -> String {
-    glib::DateTime::now_local()
-        .ok()
-        .and_then(|dt| dt.format("%H:%M:%S").ok())
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "now".into())
+fn format_terminal_activity_entry(entry: &TerminalActivityEntry, now: Instant) -> String {
+    format!("[{}] {}", relative_age_label(now.duration_since(entry.at)), entry.text)
+}
+
+fn relative_age_label(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    match seconds {
+        0..=59 => format!("{seconds}s ago"),
+        60..=3599 => format!("{}m ago", seconds / 60),
+        _ => format!("{}h ago", seconds / 3600),
+    }
+}
+
+fn relative_now_label() -> String {
+    "now".into()
 }
 
 fn is_runtime_event(summary: &str) -> bool {
@@ -2843,6 +3434,13 @@ fn infer_active_command_from_lines(lines: &[String]) -> Option<String> {
 
 fn read_dominant_process_hint(pid: u32) -> Option<String> {
     crate::procfs::dominant_child_command(pid)
+        .ok()
+        .flatten()
+        .map(|command| command.replace("  ", " ").trim().to_string())
+}
+
+fn read_shell_child_command(pid: u32) -> Option<String> {
+    crate::procfs::direct_child_command(pid)
         .ok()
         .flatten()
         .map(|command| command.replace("  ", " ").trim().to_string())
@@ -3107,14 +3705,59 @@ fn load_css() {
         }
 
         .card-alert {
-            color: rgba(186, 200, 214, 0.56);
-            font-size: 10px;
-            font-weight: 500;
+            color: rgba(202, 214, 227, 0.78);
+            font-size: 11px;
+            font-weight: 600;
             line-height: 1.2;
-            margin-top: -4px;
-            margin-bottom: -6px;
-            margin-left: 6px;
-            margin-right: 6px;
+            margin: 0;
+        }
+
+        .card-control-row {
+            min-height: 28px;
+            margin-top: -2px;
+            margin-bottom: -2px;
+        }
+
+        .card-control-label {
+            color: rgba(203, 214, 226, 0.72);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .card-control-state {
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            border-radius: 999px;
+            padding: 4px 10px;
+            border: 1px solid rgba(190, 202, 217, 0.16);
+        }
+
+        .card-control-off {
+            color: rgba(214, 222, 230, 0.84);
+            background: rgba(84, 97, 112, 0.18);
+            border-color: rgba(163, 175, 194, 0.16);
+        }
+
+        .card-control-armed {
+            color: #fde68a;
+            background: rgba(120, 87, 10, 0.22);
+            border-color: rgba(250, 204, 21, 0.22);
+        }
+
+        .card-control-nudged {
+            color: #86efac;
+            background: rgba(17, 88, 51, 0.22);
+            border-color: rgba(74, 222, 128, 0.2);
+        }
+
+        .card-control-cooldown {
+            color: #93c5fd;
+            background: rgba(33, 82, 145, 0.22);
+            border-color: rgba(96, 165, 250, 0.2);
         }
 
         .bar-widget {
@@ -3211,8 +3854,8 @@ fn load_css() {
         }
 
         .card-thinking {
-            background: linear-gradient(180deg, rgba(19, 32, 55, 0.98) 0%, rgba(11, 21, 36, 0.97) 100%);
-            border-color: rgba(125, 151, 183, 0.3);
+            background: linear-gradient(180deg, rgba(10, 49, 32, 0.98) 0%, rgba(10, 25, 18, 0.97) 100%);
+            border-color: rgba(74, 222, 128, 0.34);
         }
 
         .card-working {
@@ -3253,9 +3896,9 @@ fn load_css() {
         }
 
         .battle-thinking {
-            color: #dbe7f5;
-            background: rgba(74, 96, 126, 0.22);
-            border-color: rgba(148, 163, 184, 0.24);
+            color: #86efac;
+            background: rgba(17, 88, 51, 0.24);
+            border-color: rgba(74, 222, 128, 0.24);
         }
 
         .battle-working {
@@ -3352,9 +3995,10 @@ fn load_css() {
 mod tests {
     use super::{
         append_recent_lines, effective_display_name, naming_terminal_history, parse_run_mode,
-        synthesis_terminal_activity, RunMode, SessionObservation,
+        synthesis_terminal_activity, RunMode, SessionObservation, TerminalActivityEntry,
     };
     use crate::model::{SessionId, SessionKind, SessionLaunch, SessionRecord, SessionStatus};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn recent_lines_accumulate_semantic_output_without_duplicates() {
@@ -3367,35 +4011,60 @@ mod tests {
     }
 
     #[test]
-    fn synthesis_activity_contains_line_window_and_most_recent_updated_line() {
+    fn synthesis_activity_contains_terminal_history_and_most_recent_updated_line() {
         let mut observation = SessionObservation::new();
-        observation.recent_lines = vec![
-            "• Ran cargo test".to_string(),
-            "test result: ok".to_string(),
+        let now = Instant::now();
+        observation.terminal_activity = vec![
+            TerminalActivityEntry {
+                at: now - Duration::from_secs(2),
+                text: "• Ran cargo test".to_string(),
+            },
+            TerminalActivityEntry {
+                at: now - Duration::from_secs(1),
+                text: "test result: ok".to_string(),
+            },
         ];
         observation.painted_line = Some("Working 7".to_string());
 
-        assert_eq!(
-            synthesis_terminal_activity(&observation),
-            vec![
-                "[line] • Ran cargo test".to_string(),
-                "[line] test result: ok".to_string(),
-                "[most recent updated line] Working 7".to_string(),
-            ]
-        );
+        let history = synthesis_terminal_activity(&observation);
+        assert_eq!(history.len(), 3);
+        assert!(history[0].ends_with("• Ran cargo test"));
+        assert!(history[1].ends_with("test result: ok"));
+        assert_eq!(history[2], "[most recent updated line] Working 7");
+    }
+
+    #[test]
+    fn synthesis_activity_uses_large_history_window() {
+        let mut observation = SessionObservation::new();
+        let now = Instant::now();
+        observation.terminal_activity = (0..120)
+            .map(|index| TerminalActivityEntry {
+                at: now - Duration::from_secs((120 - index) as u64),
+                text: format!("line {index}"),
+            })
+            .collect();
+
+        let history = synthesis_terminal_activity(&observation);
+        assert_eq!(history.len(), 100);
+        assert!(history.first().is_some_and(|line| line.ends_with("line 20")));
+        assert!(history.last().is_some_and(|line| line.ends_with("line 119")));
     }
 
     #[test]
     fn naming_history_uses_large_timestamped_window() {
         let mut observation = SessionObservation::new();
+        let now = Instant::now();
         observation.terminal_activity = (0..100)
-            .map(|index| format!("[09:41:{index:02}] line {index}"))
+            .map(|index| TerminalActivityEntry {
+                at: now - Duration::from_secs((100 - index) as u64),
+                text: format!("line {index}"),
+            })
             .collect();
 
         let history = naming_terminal_history(&observation);
         assert_eq!(history.len(), 80);
-        assert_eq!(history.first().map(String::as_str), Some("[09:41:20] line 20"));
-        assert_eq!(history.last().map(String::as_str), Some("[09:41:99] line 99"));
+        assert!(history.first().is_some_and(|line| line.ends_with("line 20")));
+        assert!(history.last().is_some_and(|line| line.ends_with("line 99")));
     }
 
     #[test]
