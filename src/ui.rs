@@ -199,9 +199,14 @@ impl NamingCacheEntry {
 
 struct FocusWidgets {
     panel: gtk::Box,
+    frame: gtk::Frame,
     title: gtk::Label,
-    subtitle: gtk::Label,
-    terminal_host: gtk::Box,
+    status: gtk::Label,
+    alert: gtk::Label,
+    terminal_slot: gtk::Box,
+    bars: gtk::Box,
+    momentum_bar: SegmentedBarWidgets,
+    risk_bar: SegmentedBarWidgets,
 }
 
 struct AppContext {
@@ -282,38 +287,84 @@ fn build_ui(app: &gtk::Application) {
 
     let focus_title = gtk::Label::builder()
         .xalign(0.0)
-        .css_classes(vec!["focus-title".to_string()])
+        .css_classes(vec!["card-title".to_string()])
         .build();
-    let focus_subtitle = gtk::Label::builder()
+    let focus_status = gtk::Label::builder()
+        .xalign(0.5)
+        .css_classes(vec!["card-status".to_string(), "battle-active".to_string()])
+        .label("Active")
+        .build();
+    let focus_alert = gtk::Label::builder()
         .xalign(0.0)
-        .css_classes(vec!["focus-subtitle".to_string()])
         .wrap(true)
+        .hexpand(true)
+        .css_classes(vec!["card-alert".to_string()])
         .build();
-    let terminal_host = gtk::Box::builder()
+    let focus_terminal_slot = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .hexpand(true)
         .vexpand(true)
         .build();
-    let focus_terminal_frame = gtk::Frame::builder()
-        .hexpand(true)
-        .vexpand(true)
-        .child(&terminal_host)
-        .build();
-    focus_terminal_frame.add_css_class("focus-frame");
+    focus_terminal_slot.add_css_class("card-terminal-slot");
+    let focus_momentum_bar = build_segmented_bar("Momentum");
+    let focus_risk_bar = build_segmented_bar("Risk");
 
     let focus_header_left = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .spacing(4)
+        .spacing(0)
         .hexpand(true)
         .build();
+    focus_header_left.add_css_class("card-title-stack");
     focus_header_left.append(&focus_title);
-    focus_header_left.append(&focus_subtitle);
+
+    let focus_header_right = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(0)
+        .halign(gtk::Align::End)
+        .valign(gtk::Align::Start)
+        .build();
+    focus_header_right.add_css_class("card-status-stack");
+    focus_header_right.append(&focus_status);
 
     let focus_header = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
-        .spacing(12)
+        .spacing(8)
         .build();
+    focus_header.add_css_class("card-header-row");
     focus_header.append(&focus_header_left);
+    focus_header.append(&focus_header_right);
+
+    let focus_bars = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .hexpand(true)
+        .build();
+    focus_bars.add_css_class("card-bars-row");
+    focus_bars.append(&focus_momentum_bar.frame);
+    focus_bars.append(&focus_risk_bar.frame);
+
+    let focus_content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .margin_top(16)
+        .margin_bottom(16)
+        .margin_start(16)
+        .margin_end(16)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    focus_content.append(&focus_header);
+    focus_content.append(&focus_alert);
+    focus_content.append(&focus_terminal_slot);
+    focus_content.append(&focus_bars);
+
+    let focus_frame = gtk::Frame::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .child(&focus_content)
+        .build();
+    focus_frame.add_css_class("battle-card");
+    focus_frame.add_css_class("single-card");
 
     let focus_panel = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -327,8 +378,7 @@ fn build_ui(app: &gtk::Application) {
         .visible(false)
         .build();
     focus_panel.add_css_class("focus-panel");
-    focus_panel.append(&focus_header);
-    focus_panel.append(&focus_terminal_frame);
+    focus_panel.append(&focus_frame);
 
     let title = adw::WindowTitle::new("Exaterm", "");
     let header = adw::HeaderBar::builder()
@@ -369,9 +419,14 @@ fn build_ui(app: &gtk::Application) {
         battlefield_scroller,
         focus: FocusWidgets {
             panel: focus_panel,
+            frame: focus_frame,
             title: focus_title,
-            subtitle: focus_subtitle,
-            terminal_host,
+            status: focus_status,
+            alert: focus_alert,
+            terminal_slot: focus_terminal_slot,
+            bars: focus_bars,
+            momentum_bar: focus_momentum_bar,
+            risk_bar: focus_risk_bar,
         },
         session_cards: RefCell::new(BTreeMap::new()),
         observations: RefCell::new(BTreeMap::new()),
@@ -2386,12 +2441,52 @@ fn refresh_focus_panel(context: &Rc<AppContext>) {
         return;
     };
     let observations = context.observations.borrow();
-    let display_name = observations
-        .get(&session_id)
-        .map(|observation| effective_display_name(session, observation))
-        .unwrap_or_else(|| session.launch.name.clone());
-    context.focus.title.set_label(&display_name);
-    context.focus.subtitle.set_label(&session.launch.subtitle);
+    let Some(observation) = observations.get(&session_id) else {
+        return;
+    };
+    let observed = ObservedActivity {
+        active_command: observation.active_command.clone(),
+        dominant_process: observation.dominant_process.clone(),
+        recent_files: observation.recent_files.clone(),
+        work_output_excerpt: observation.work_output_excerpt.clone(),
+        idle_seconds: Some(observation.last_change.elapsed().as_secs()),
+    };
+    let mut card_model = build_battle_card(
+        session,
+        &observed,
+        &observation.recent_lines,
+        &DeterministicIntentEngine,
+    );
+    let evidence = build_tactical_evidence(session, observation, &card_model);
+    let live_summary = current_summary(context, session_id, &evidence);
+    if let Some(summary) = live_summary.clone() {
+        card_model = apply_tactical_synthesis(card_model, summary);
+    }
+
+    context
+        .focus
+        .title
+        .set_label(&effective_display_name(session, observation));
+    apply_battle_status_style(&context.focus.status, card_model.status);
+    apply_battle_card_surface_style(&context.focus.frame, card_model.status);
+    context
+        .focus
+        .status
+        .set_label(&status_chip_label(card_model.status, &card_model.recency_label));
+    let operator_summary = live_summary
+        .as_ref()
+        .and_then(|summary| summary.terse_operator_summary.as_ref())
+        .cloned()
+        .unwrap_or_default();
+    context.focus.alert.set_label(&operator_summary);
+    context.focus.alert.set_visible(!operator_summary.is_empty());
+    context.focus.bars.set_orientation(gtk::Orientation::Horizontal);
+    apply_segmented_bar(
+        &context.focus.momentum_bar,
+        momentum_bar_value(live_summary.as_ref(), Some(observation.last_change.elapsed().as_secs()))
+            .as_ref(),
+    );
+    apply_segmented_bar(&context.focus.risk_bar, risk_bar_value(live_summary.as_ref()).as_ref());
 }
 
 fn update_flowbox_columns(context: &Rc<AppContext>) {
@@ -2423,6 +2518,8 @@ fn update_flowbox_columns(context: &Rc<AppContext>) {
         } else {
             1
         }
+    } else if total == 4 {
+        2
     } else if total <= 4 {
         if available_width >= 1800 {
             total
@@ -2444,7 +2541,7 @@ fn battlefield_embeds_terminal(context: &Rc<AppContext>, _session_id: SessionId)
     }
 
     let total = context.session_cards.borrow().len();
-    if total == 0 || total > 2 {
+    if total == 0 || total > 4 {
         return false;
     }
 
@@ -2478,7 +2575,7 @@ fn sync_terminal_parents(context: &Rc<AppContext>) {
     let focused = context.state.borrow().focused_session();
     for (session_id, card) in context.session_cards.borrow().iter() {
         if focused == Some(*session_id) {
-            reparent_widget_to_box(&card.terminal_view, &context.focus.terminal_host);
+            reparent_widget_to_box(&card.terminal_view, &context.focus.terminal_slot);
             card.terminal.grab_focus();
         } else if battlefield_embeds_terminal(context, *session_id) {
             reparent_widget_to_box(&card.terminal_view, &card.terminal_slot);
@@ -3119,31 +3216,31 @@ fn load_css() {
             border-color: rgba(192, 132, 252, 0.24);
         }
 
-        .focus-mode .battle-card {
+        .focus-mode flowboxchild .battle-card {
             min-width: 176px;
             min-height: 182px;
             border-radius: 18px;
             box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
         }
 
-        .focus-mode .card-title {
+        .focus-mode flowboxchild .card-title {
             font-size: 15px;
         }
 
-        .focus-mode .card-status,
-        .focus-mode .card-recency {
+        .focus-mode flowboxchild .card-status,
+        .focus-mode flowboxchild .card-recency {
             font-size: 10px;
         }
 
-        .focus-mode .card-header-row {
+        .focus-mode flowboxchild .card-header-row {
             min-height: 28px;
         }
 
-        .focus-mode .card-bottom-stack {
+        .focus-mode flowboxchild .card-bottom-stack {
             margin-top: 0;
         }
 
-        .focus-mode .card-alert {
+        .focus-mode flowboxchild .card-alert {
             color: rgba(206, 217, 229, 0.84);
             font-size: 12px;
             font-weight: 600;
@@ -3158,10 +3255,10 @@ fn load_css() {
             margin-right: 0;
         }
 
-        .focus-mode .card-headline,
-        .focus-mode .card-detail,
-        .focus-mode .card-scrollback-band,
-        .focus-mode .bar-widget {
+        .focus-mode flowboxchild .card-headline,
+        .focus-mode flowboxchild .card-detail,
+        .focus-mode flowboxchild .card-scrollback-band,
+        .focus-mode flowboxchild .bar-widget {
             display: none;
         }
 
