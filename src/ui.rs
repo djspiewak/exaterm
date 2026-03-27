@@ -693,6 +693,9 @@ fn build_battle_card_widgets(
     let scrollback_band = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(4)
+        .hexpand(true)
+        .vexpand(true)
+        .valign(gtk::Align::Fill)
         .build();
     scrollback_band.add_css_class("card-scrollback-band");
     scrollback_band.append(&evidence_one);
@@ -842,12 +845,12 @@ fn install_terminal_context_menu(
         .orientation(gtk::Orientation::Vertical)
         .spacing(0)
         .build();
-    let new_terminal_button = gtk::Button::builder()
-        .label("New Terminal Here")
+    let split_terminal_button = gtk::Button::builder()
+        .label("Split Terminal")
         .halign(gtk::Align::Fill)
         .build();
-    new_terminal_button.add_css_class("flat");
-    menu_box.append(&new_terminal_button);
+    split_terminal_button.add_css_class("flat");
+    menu_box.append(&split_terminal_button);
 
     let popover = gtk::Popover::builder()
         .has_arrow(true)
@@ -859,17 +862,21 @@ fn install_terminal_context_menu(
     {
         let context = context.clone();
         let popover = popover.clone();
-        new_terminal_button.connect_clicked(move |_| {
+        split_terminal_button.connect_clicked(move |_| {
             popover.popdown();
-            spawn_new_terminal_here(&context, source_session);
+            split_terminal_here(&context, source_session);
         });
     }
 
     let right_click = gtk::GestureClick::new();
     right_click.set_button(3);
     {
+        let context = context.clone();
+        let split_terminal_button = split_terminal_button.clone();
         let popover = popover.clone();
         right_click.connect_pressed(move |gesture, _, x, y| {
+            let count = context.state.borrow().sessions().len();
+            split_terminal_button.set_sensitive(matches!(count, 1 | 2 | 4 | 6));
             let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
             popover.set_pointing_to(Some(&rect));
             popover.popup();
@@ -879,22 +886,38 @@ fn install_terminal_context_menu(
     terminal_view.add_controller(right_click);
 }
 
-fn spawn_new_terminal_here(context: &Rc<AppContext>, source_session: SessionId) {
+fn split_terminal_here(context: &Rc<AppContext>, source_session: SessionId) {
+    let current_count = context.state.borrow().sessions().len();
+    let additions = match current_count {
+        1 => 1,
+        2 | 4 | 6 => 2,
+        _ => 0,
+    };
+    if additions == 0 {
+        return;
+    }
+
     let cwd = context
         .state
         .borrow()
         .session(source_session)
         .and_then(|session| session.launch.cwd.clone());
-    let number = context.state.borrow().sessions().len() + 1;
-    let mut launch = SessionLaunch::user_shell(
-        format!("Shell {number}"),
-        "Generic command session",
-    );
-    if let Some(cwd) = cwd {
-        launch = launch.with_cwd(cwd);
+    let mut last_session = None;
+    for _ in 0..additions {
+        let number = context.state.borrow().sessions().len() + 1;
+        let mut launch = SessionLaunch::user_shell(
+            format!("Shell {number}"),
+            "Generic command session",
+        );
+        if let Some(cwd) = cwd.clone() {
+            launch = launch.with_cwd(cwd);
+        }
+        last_session = Some(append_session_card(context, launch));
     }
 
-    let new_session = append_session_card(context, launch);
+    let Some(new_session) = last_session else {
+        return;
+    };
     context.state.borrow_mut().select_session(new_session);
     if let Some(card) = context.session_cards.borrow().get(&new_session) {
         context.cards.select_child(&card.row);
@@ -2298,6 +2321,13 @@ fn refresh_card_styles(context: &Rc<AppContext>) {
         } else {
             gtk::Orientation::Vertical
         });
+        if shows_terminal {
+            card.frame.remove_css_class("scrollback-card");
+            card.terminal_slot.remove_css_class("scrollback-terminal-hidden");
+        } else {
+            card.frame.add_css_class("scrollback-card");
+            card.terminal_slot.add_css_class("scrollback-terminal-hidden");
+        }
         if focus_mode {
             card.middle_stack.set_visible_child_name("scrollback");
             card.middle_stack.set_visible(false);
@@ -2801,12 +2831,24 @@ fn load_css() {
             min-height: 0;
         }
 
+        .battle-card.scrollback-card {
+            min-width: 0;
+            min-height: 0;
+        }
+
         .card-terminal-slot {
             border-radius: 20px;
             border: 1px solid rgba(120, 136, 158, 0.2);
             background: rgba(7, 13, 20, 0.96);
             min-height: 420px;
             padding: 10px;
+        }
+
+        .card-terminal-slot.scrollback-terminal-hidden {
+            min-height: 0;
+            padding: 0;
+            border-color: transparent;
+            background: transparent;
         }
 
         .card-header-row {
@@ -2827,6 +2869,7 @@ fn load_css() {
             border: 1px solid rgba(173, 188, 204, 0.08);
             background: rgba(8, 14, 22, 0.34);
             padding: 8px 10px;
+            min-height: 0;
         }
 
         .card-scrollback-line {
