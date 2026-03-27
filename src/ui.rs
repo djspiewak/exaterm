@@ -156,6 +156,7 @@ struct NamingCacheEntry {
 
 struct SessionRuntime {
     resize_target: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    display_resize_target: Option<Arc<Mutex<File>>>,
     events: mpsc::Receiver<RuntimeEvent>,
     last_size: Option<(u16, u16)>,
 }
@@ -962,6 +963,7 @@ fn spawn_direct_runtime(
         pid,
         session_runtime: SessionRuntime {
             resize_target,
+            display_resize_target: None,
             events: event_rx,
             last_size: Some((size.rows, size.cols)),
         },
@@ -994,115 +996,205 @@ fn spawn_proxy_runtime(
     drop(pair.slave);
 
     let pid = child.process_id();
-    let agent_reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(|error| format!("failed to clone agent reader: {error}"))?;
-    let agent_writer = Arc::new(Mutex::new(
-        pair.master
-            .take_writer()
-            .map_err(|error| format!("failed to take agent writer: {error}"))?,
-    ));
+    let Some(agent_master_fd) = pair.master.as_raw_fd() else {
+        return Err("agent pty master did not expose a file descriptor".into());
+    };
+    let agent_reader_fd = unsafe { libc::dup(agent_master_fd) };
+    let agent_writer_fd = unsafe { libc::dup(agent_master_fd) };
+    if agent_reader_fd < 0 || agent_writer_fd < 0 {
+        unsafe {
+            if agent_reader_fd >= 0 {
+                libc::close(agent_reader_fd);
+            }
+            if agent_writer_fd >= 0 {
+                libc::close(agent_writer_fd);
+            }
+        }
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    let mut agent_reader = unsafe { File::from_raw_fd(agent_reader_fd) };
+    let mut agent_writer = unsafe { File::from_raw_fd(agent_writer_fd) };
     let resize_target = Arc::new(Mutex::new(pair.master));
-    let (display_pty, mut display_reader, mut display_writer) = create_display_pty(size)?;
+    let (display_pty, mut display_reader, mut display_writer, display_resizer) =
+        create_display_pty(size)?;
     terminal.set_pty(Some(&display_pty));
 
     let (event_tx, event_rx) = mpsc::channel::<RuntimeEvent>();
     let stop_flag = Arc::new(AtomicBool::new(false));
 
-    spawn_agent_output_thread(
-        agent_reader,
+    spawn_proxy_relay_thread(
+        &mut agent_reader,
+        &mut agent_writer,
+        &mut display_reader,
         &mut display_writer,
         event_tx.clone(),
         stop_flag.clone(),
     );
-    spawn_display_input_thread(&mut display_reader, agent_writer);
     spawn_wait_thread(child, event_tx, stop_flag);
 
     Ok(ProxySpawnResult {
         pid,
         session_runtime: SessionRuntime {
             resize_target,
+            display_resize_target: Some(Arc::new(Mutex::new(display_resizer))),
             events: event_rx,
             last_size: Some((size.rows, size.cols)),
         },
     })
 }
 
-fn spawn_agent_output_thread(
-    mut agent_reader: Box<dyn Read + Send>,
+fn spawn_proxy_relay_thread(
+    agent_reader: &mut File,
+    agent_writer: &mut File,
+    display_reader: &mut File,
     display_writer: &mut File,
     event_tx: mpsc::Sender<RuntimeEvent>,
     stop_flag: Arc<AtomicBool>,
 ) {
+    const RELAY_BUF_SIZE: usize = 16 * 1024;
+    let mut agent_reader = agent_reader
+        .try_clone()
+        .expect("agent reader clone should succeed");
+    let mut agent_writer = agent_writer
+        .try_clone()
+        .expect("agent writer clone should succeed");
+    let mut display_reader = display_reader
+        .try_clone()
+        .expect("display reader clone should succeed");
     let mut display_writer = display_writer
         .try_clone()
         .expect("display slave writer clone should succeed");
+
+    set_nonblocking(agent_reader.as_raw_fd()).expect("agent reader should support nonblocking");
+    set_nonblocking(agent_writer.as_raw_fd()).expect("agent writer should support nonblocking");
+    set_nonblocking(display_reader.as_raw_fd()).expect("display reader should support nonblocking");
+    set_nonblocking(display_writer.as_raw_fd()).expect("display writer should support nonblocking");
+
     thread::spawn(move || {
         let mut processor = TerminalStreamProcessor::default();
-        let mut buf = [0u8; 8192];
+        let mut to_display = Vec::<u8>::with_capacity(RELAY_BUF_SIZE);
+        let mut to_agent = Vec::<u8>::with_capacity(RELAY_BUF_SIZE);
+        let mut scratch = [0u8; 8192];
+
         loop {
-            match agent_reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    let chunk = &buf[..n];
-                    if display_writer.write_all(chunk).is_err() || display_writer.flush().is_err() {
-                        break;
-                    }
-                    let update = processor.ingest(chunk);
-                    if !update.is_empty() || !chunk.is_empty() {
-                        let _ = event_tx.send(RuntimeEvent::Stream(StreamRuntimeUpdate {
-                            semantic_lines: update.semantic_lines,
-                            painted_line: update.painted_line,
-                        }));
-                    }
+            let mut fds = [
+                libc::pollfd {
+                    fd: display_reader.as_raw_fd(),
+                    events: if to_agent.len() < RELAY_BUF_SIZE {
+                        libc::POLLIN
+                    } else {
+                        0
+                    },
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: display_writer.as_raw_fd(),
+                    events: if to_display.is_empty() {
+                        0
+                    } else {
+                        libc::POLLOUT
+                    },
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: agent_reader.as_raw_fd(),
+                    events: if to_display.len() < RELAY_BUF_SIZE {
+                        libc::POLLIN
+                    } else {
+                        0
+                    },
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: agent_writer.as_raw_fd(),
+                    events: if to_agent.is_empty() {
+                        0
+                    } else {
+                        libc::POLLOUT
+                    },
+                    revents: 0,
+                },
+            ];
+
+            let poll_result = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) };
+            if poll_result < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
                 }
-                Err(_) => break,
+                break;
+            }
+
+            if (fds[0].revents | fds[1].revents | fds[2].revents | fds[3].revents)
+                & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL)
+                != 0
+            {
+                break;
+            }
+
+            if fds[0].revents & libc::POLLIN != 0 {
+                let remaining = RELAY_BUF_SIZE.saturating_sub(to_agent.len());
+                let read_len = remaining.min(scratch.len());
+                match display_reader.read(&mut scratch[..read_len]) {
+                    Ok(0) => break,
+                    Ok(n) => to_agent.extend_from_slice(&scratch[..n]),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(_) => break,
+                }
+            }
+
+            if fds[2].revents & libc::POLLIN != 0 {
+                let remaining = RELAY_BUF_SIZE.saturating_sub(to_display.len());
+                let read_len = remaining.min(scratch.len());
+                match agent_reader.read(&mut scratch[..read_len]) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let chunk = &scratch[..n];
+                        to_display.extend_from_slice(chunk);
+                        let update = processor.ingest(chunk);
+                        if !update.is_empty() || !chunk.is_empty() {
+                            let _ = event_tx.send(RuntimeEvent::Stream(StreamRuntimeUpdate {
+                                semantic_lines: update.semantic_lines,
+                                painted_line: update.painted_line,
+                            }));
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(error) if error.raw_os_error() == Some(libc::EIO) => break,
+                    Err(_) => break,
+                }
+            }
+
+            if fds[1].revents & libc::POLLOUT != 0 && !to_display.is_empty() {
+                match display_writer.write(&to_display) {
+                    Ok(0) => break,
+                    Ok(n) => consume_relay_buffer(&mut to_display, n),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(_) => break,
+                }
+            }
+
+            if fds[3].revents & libc::POLLOUT != 0 && !to_agent.is_empty() {
+                match agent_writer.write(&to_agent) {
+                    Ok(0) => break,
+                    Ok(n) => consume_relay_buffer(&mut to_agent, n),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(_) => break,
+                }
             }
         }
         stop_flag.store(true, Ordering::Relaxed);
     });
 }
 
-fn spawn_display_input_thread(
-    display_reader: &mut File,
-    agent_writer: Arc<Mutex<Box<dyn Write + Send>>>,
-) {
-    let mut display_reader = display_reader
-        .try_clone()
-        .expect("display slave reader clone should succeed");
-    set_nonblocking(display_reader.as_raw_fd()).expect("display slave should support nonblocking");
-    thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match display_reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if send_agent_input(&agent_writer, &buf[..n]).is_err() {
-                        break;
-                    }
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(8));
-                }
-                Err(_) => break,
-            }
-        }
-    });
+fn consume_relay_buffer(buffer: &mut Vec<u8>, amount: usize) {
+    if amount == 0 || amount > buffer.len() {
+        return;
+    }
+    buffer.drain(0..amount);
 }
 
-fn send_agent_input(
-    writer: &Arc<Mutex<Box<dyn Write + Send>>>,
-    bytes: &[u8],
-) -> std::io::Result<()> {
-    let mut writer = writer
-        .lock()
-        .map_err(|_| std::io::Error::other("agent writer lock poisoned"))?;
-    writer.write_all(bytes)?;
-    writer.flush()
-}
-
-fn create_display_pty(size: PtySize) -> Result<(vte::Pty, File, File), String> {
+fn create_display_pty(size: PtySize) -> Result<(vte::Pty, File, File, File), String> {
     let mut master_fd = -1;
     let mut slave_fd = -1;
     let mut winsize = libc::winsize {
@@ -1137,13 +1229,17 @@ fn create_display_pty(size: PtySize) -> Result<(vte::Pty, File, File), String> {
 
     let reader_fd = unsafe { libc::dup(slave_fd) };
     let writer_fd = unsafe { libc::dup(slave_fd) };
-    if reader_fd < 0 || writer_fd < 0 {
+    let resize_fd = unsafe { libc::dup(master_fd) };
+    if reader_fd < 0 || writer_fd < 0 || resize_fd < 0 {
         unsafe {
             if reader_fd >= 0 {
                 libc::close(reader_fd);
             }
             if writer_fd >= 0 {
                 libc::close(writer_fd);
+            }
+            if resize_fd >= 0 {
+                libc::close(resize_fd);
             }
             libc::close(master_fd);
             libc::close(slave_fd);
@@ -1158,9 +1254,10 @@ fn create_display_pty(size: PtySize) -> Result<(vte::Pty, File, File), String> {
     let master = unsafe { OwnedFd::from_raw_fd(master_fd) };
     let reader = unsafe { File::from_raw_fd(reader_fd) };
     let writer = unsafe { File::from_raw_fd(writer_fd) };
+    let resizer = unsafe { File::from_raw_fd(resize_fd) };
     let pty = vte::Pty::foreign_sync(master, None::<&gio::Cancellable>)
         .map_err(|error| error.to_string())?;
-    Ok((pty, reader, writer))
+    Ok((pty, reader, writer, resizer))
 }
 
 fn set_raw_display_slave(fd: i32) -> std::io::Result<()> {
@@ -1206,8 +1303,14 @@ fn spawn_wait_thread(
 }
 
 fn terminal_size_hint(terminal: &vte::Terminal) -> PtySize {
-    let rows = terminal.row_count().max(DEFAULT_PROXY_ROWS as i64) as u16;
-    let cols = terminal.column_count().max(DEFAULT_PROXY_COLS as i64) as u16;
+    let rows = match terminal.row_count() {
+        rows if rows > 0 => rows as u16,
+        _ => DEFAULT_PROXY_ROWS,
+    };
+    let cols = match terminal.column_count() {
+        cols if cols > 0 => cols as u16,
+        _ => DEFAULT_PROXY_COLS,
+    };
     PtySize {
         rows,
         cols,
@@ -1368,8 +1471,27 @@ fn sync_runtime_sizes(context: &Rc<AppContext>) {
         if let Ok(master) = runtime.resize_target.lock() {
             let _ = master.resize(size);
         }
+        if let Some(display_resizer) = runtime.display_resize_target.as_ref() {
+            if let Ok(display_resizer) = display_resizer.lock() {
+                let _ = resize_display_pty(display_resizer.as_raw_fd(), size);
+            }
+        }
         runtime.last_size = Some(current);
     }
+}
+
+fn resize_display_pty(fd: i32, size: PtySize) -> std::io::Result<()> {
+    let winsize = libc::winsize {
+        ws_row: size.rows,
+        ws_col: size.cols,
+        ws_xpixel: size.pixel_width,
+        ws_ypixel: size.pixel_height,
+    };
+    let result = unsafe { libc::ioctl(fd, libc::TIOCSWINSZ as _, &winsize) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn drain_summary_results(context: &Rc<AppContext>) {

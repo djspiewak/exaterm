@@ -64,7 +64,7 @@ impl SessionLaunch {
             subtitle: subtitle.into(),
             program,
             args,
-            cwd: None,
+            cwd: std::env::current_dir().ok(),
             kind: SessionKind::WaitingShell,
         }
     }
@@ -658,6 +658,7 @@ mod tests {
         assert!(!shell.args.is_empty());
         assert!(!shell.args.contains(&"--noprofile".to_string()));
         assert!(!shell.args.contains(&"--norc".to_string()));
+        assert_eq!(shell.cwd, std::env::current_dir().ok());
     }
 
     #[test]
