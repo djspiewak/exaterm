@@ -209,7 +209,14 @@ struct FocusWidgets {
     risk_bar: SegmentedBarWidgets,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RunMode {
+    Local,
+    Ssh { target: String },
+}
+
 struct AppContext {
+    mode: RunMode,
     state: Rc<RefCell<WorkspaceState>>,
     title: adw::WindowTitle,
     empty_state: gtk::Box,
@@ -227,16 +234,41 @@ struct AppContext {
 }
 
 pub fn run() -> glib::ExitCode {
+    let mode = match parse_run_mode(std::env::args().skip(1)) {
+        Ok(mode) => mode,
+        Err(error) => {
+            eprintln!("{error}");
+            eprintln!("usage: exaterm [--ssh user@host]");
+            return glib::ExitCode::from(2);
+        }
+    };
     let app = gtk::Application::builder().application_id(APP_ID).build();
     app.connect_startup(|_| {
         adw::init().expect("libadwaita should initialize");
         adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
     });
-    app.connect_activate(build_ui);
+    app.connect_activate(move |app| build_ui(app, mode.clone()));
     app.run()
 }
 
-fn build_ui(app: &gtk::Application) {
+fn parse_run_mode(args: impl IntoIterator<Item = String>) -> Result<RunMode, String> {
+    let mut args = args.into_iter();
+    match args.next().as_deref() {
+        None => Ok(RunMode::Local),
+        Some("--ssh") => {
+            let Some(target) = args.next() else {
+                return Err("--ssh requires a target like user@host".into());
+            };
+            if args.next().is_some() {
+                return Err("unexpected extra arguments after --ssh target".into());
+            }
+            Ok(RunMode::Ssh { target })
+        }
+        Some(other) => Err(format!("unknown argument: {other}")),
+    }
+}
+
+fn build_ui(app: &gtk::Application, mode: RunMode) {
     load_css();
 
     let cards = gtk::FlowBox::builder()
@@ -411,6 +443,7 @@ fn build_ui(app: &gtk::Application) {
         .build();
 
     let context = Rc::new(AppContext {
+        mode: mode.clone(),
         state: Rc::new(RefCell::new(WorkspaceState::new())),
         title,
         empty_state,
@@ -506,7 +539,7 @@ fn build_ui(app: &gtk::Application) {
     if visual_gallery_enabled() {
         seed_visual_gallery(&context);
     } else {
-        let launch = SessionLaunch::user_shell("Shell 1", "Generic command session");
+        let launch = default_shell_launch(&context, 1);
         append_session_card(&context, launch);
     }
 
@@ -514,6 +547,20 @@ fn build_ui(app: &gtk::Application) {
     refresh_workspace(&context);
 
     window.present();
+}
+
+fn default_shell_launch(context: &Rc<AppContext>, number: usize) -> SessionLaunch {
+    match &context.mode {
+        RunMode::Local => SessionLaunch::user_shell(
+            format!("Shell {number}"),
+            "Generic command session",
+        ),
+        RunMode::Ssh { target } => SessionLaunch::ssh_shell(
+            format!("SSH {number}"),
+            format!("Remote session on {target}"),
+            target.clone(),
+        ),
+    }
 }
 
 fn append_session_card(context: &Rc<AppContext>, launch: SessionLaunch) -> SessionId {
@@ -857,6 +904,11 @@ fn build_battle_card_widgets(
         .vexpand(true)
         .build();
     terminal.set_scrollback_lines(100_000);
+    terminal.connect_selection_changed(|terminal| {
+        if terminal.has_selection() {
+            terminal.copy_clipboard_format(vte::Format::Text);
+        }
+    });
     terminal.add_css_class("terminal-surface");
     let terminal_view = gtk::ScrolledWindow::builder()
         .hexpand(true)
@@ -961,12 +1013,11 @@ fn split_terminal_here(context: &Rc<AppContext>, source_session: SessionId) {
     let mut last_session = None;
     for _ in 0..additions {
         let number = context.state.borrow().sessions().len() + 1;
-        let mut launch = SessionLaunch::user_shell(
-            format!("Shell {number}"),
-            "Generic command session",
-        );
-        if let Some(cwd) = cwd.clone() {
-            launch = launch.with_cwd(cwd);
+        let mut launch = default_shell_launch(context, number);
+        if matches!(context.mode, RunMode::Local) {
+            if let Some(cwd) = cwd.clone() {
+                launch = launch.with_cwd(cwd);
+            }
         }
         last_session = Some(append_session_card(context, launch));
     }
@@ -1678,8 +1729,17 @@ fn drain_summary_results(context: &Rc<AppContext>) {
 }
 
 fn refresh_observation(context: &Rc<AppContext>, session: &crate::model::SessionRecord) {
-    let dominant_process = session.pid.and_then(read_dominant_process_hint);
-    let process_tree_excerpt = session.pid.and_then(read_process_tree_hint);
+    let remote_mode = matches!(context.mode, RunMode::Ssh { .. });
+    let dominant_process = if remote_mode {
+        None
+    } else {
+        session.pid.and_then(read_dominant_process_hint)
+    };
+    let process_tree_excerpt = if remote_mode {
+        None
+    } else {
+        session.pid.and_then(read_process_tree_hint)
+    };
 
     let mut observations = context.observations.borrow_mut();
     let observation = observations
@@ -1699,12 +1759,16 @@ fn refresh_observation(context: &Rc<AppContext>, session: &crate::model::Session
             .find(|line| is_meaningful_output_line(line))
             .cloned()
     });
-    let changed_files = session
-        .launch
-        .cwd
-        .as_deref()
-        .map(|cwd| scan_recent_files(cwd, &mut observation.file_fingerprints))
-        .unwrap_or_default();
+    let changed_files = if remote_mode {
+        Vec::new()
+    } else {
+        session
+            .launch
+            .cwd
+            .as_deref()
+            .map(|cwd| scan_recent_files(cwd, &mut observation.file_fingerprints))
+            .unwrap_or_default()
+    };
     let now = Instant::now();
     for file in changed_files {
         observation.recent_file_activity.insert(file, now);
@@ -3282,8 +3346,8 @@ fn load_css() {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_recent_lines, effective_display_name, naming_terminal_history,
-        synthesis_terminal_activity, SessionObservation,
+        append_recent_lines, effective_display_name, naming_terminal_history, parse_run_mode,
+        synthesis_terminal_activity, RunMode, SessionObservation,
     };
     use crate::model::{SessionId, SessionKind, SessionLaunch, SessionRecord, SessionStatus};
 
@@ -3356,5 +3420,22 @@ mod tests {
             effective_display_name(&named_session, &observation),
             "Parser Review"
         );
+    }
+
+    #[test]
+    fn parses_ssh_run_mode() {
+        let mode = parse_run_mode(vec!["--ssh".into(), "user@example.com".into()]).unwrap();
+        assert_eq!(
+            mode,
+            RunMode::Ssh {
+                target: "user@example.com".into()
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_run_mode_args() {
+        assert!(parse_run_mode(vec!["--ssh".into()]).is_err());
+        assert!(parse_run_mode(vec!["--bogus".into()]).is_err());
     }
 }

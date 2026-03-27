@@ -69,6 +69,21 @@ impl SessionLaunch {
         }
     }
 
+    pub fn ssh_shell(
+        name: impl Into<String>,
+        subtitle: impl Into<String>,
+        target: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            subtitle: subtitle.into(),
+            program: "/usr/bin/env".into(),
+            args: vec!["ssh".into(), target.into()],
+            cwd: None,
+            kind: SessionKind::WaitingShell,
+        }
+    }
+
     pub fn running_stream(
         name: impl Into<String>,
         subtitle: impl Into<String>,
@@ -659,6 +674,16 @@ mod tests {
         assert!(!shell.args.contains(&"--noprofile".to_string()));
         assert!(!shell.args.contains(&"--norc".to_string()));
         assert_eq!(shell.cwd, std::env::current_dir().ok());
+    }
+
+    #[test]
+    fn ssh_shell_launch_targets_remote_host() {
+        let shell = SessionLaunch::ssh_shell("A", "shell", "user@example.com");
+
+        assert_eq!(shell.kind, SessionKind::WaitingShell);
+        assert_eq!(shell.program, "/usr/bin/env");
+        assert_eq!(shell.args, vec!["ssh".to_string(), "user@example.com".to_string()]);
+        assert_eq!(shell.cwd, None);
     }
 
     #[test]
