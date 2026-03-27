@@ -247,14 +247,14 @@ pub fn nudge_terminal_history(observation: &SessionObservation) -> Vec<String> {
         .collect()
 }
 
-pub fn scrollback_fragments(observation: &SessionObservation) -> Vec<String> {
+pub fn scrollback_fragments(observation: &SessionObservation, limit: usize) -> Vec<String> {
     observation
         .recent_lines
         .iter()
         .rev()
         .map(|line| line.trim().to_string())
         .filter(|line| !line.is_empty())
-        .take(3)
+        .take(limit)
         .collect::<Vec<_>>()
         .into_iter()
         .rev()

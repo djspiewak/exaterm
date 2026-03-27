@@ -65,9 +65,6 @@ struct SessionCardWidgets {
     bars: gtk::Box,
     headline: gtk::Label,
     detail: gtk::Label,
-    evidence_one: gtk::Label,
-    evidence_two: gtk::Label,
-    evidence_three: gtk::Label,
     alert: gtk::Label,
     momentum_bar: SegmentedBarWidgets,
     risk_bar: SegmentedBarWidgets,
@@ -127,6 +124,7 @@ struct SummaryResult {
 }
 
 struct SummaryCacheEntry {
+    first_seen: Instant,
     completed_signature: Option<String>,
     requested_signature: Option<String>,
     last_summary: Option<TacticalSynthesis>,
@@ -159,6 +157,7 @@ struct NudgeCacheEntry {
 impl SummaryCacheEntry {
     fn new() -> Self {
         Self {
+            first_seen: Instant::now(),
             completed_signature: None,
             requested_signature: None,
             last_summary: None,
@@ -166,6 +165,19 @@ impl SummaryCacheEntry {
             last_attempt: None,
             in_flight: false,
         }
+    }
+}
+
+fn summary_refresh_interval(session_age: Duration) -> Duration {
+    let seconds = session_age.as_secs();
+    if seconds < 60 {
+        Duration::from_secs(5)
+    } else if seconds < 180 {
+        Duration::from_secs(10)
+    } else if seconds < 300 {
+        Duration::from_secs(20)
+    } else {
+        Duration::from_secs(30)
     }
 }
 
@@ -203,8 +215,6 @@ struct FocusWidgets {
     frame: gtk::Frame,
     title: gtk::Label,
     status: gtk::Label,
-    nudge_row: gtk::Box,
-    nudge_state: gtk::Label,
     alert: gtk::Label,
     terminal_slot: gtk::Box,
     bars: gtk::Box,
@@ -248,7 +258,10 @@ pub fn run() -> glib::ExitCode {
             return glib::ExitCode::from(2);
         }
     };
-    let app = gtk::Application::builder().application_id(APP_ID).build();
+    let app = gtk::Application::builder()
+        .application_id(APP_ID)
+        .flags(gio::ApplicationFlags::NON_UNIQUE)
+        .build();
     app.connect_startup(|_| {
         adw::init().expect("libadwaita should initialize");
         adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
@@ -345,22 +358,6 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
     focus_alert.set_halign(gtk::Align::Fill);
     focus_alert.set_single_line_mode(true);
     focus_alert.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    let focus_nudge_state = gtk::Label::builder()
-        .label("AUTONUDGE OFF")
-        .xalign(0.5)
-        .css_classes(vec!["card-control-state".to_string(), "card-control-off".to_string()])
-        .build();
-    focus_nudge_state.set_halign(gtk::Align::End);
-    let focus_nudge_row = gtk::Box::builder()
-        .orientation(gtk::Orientation::Horizontal)
-        .spacing(8)
-        .hexpand(true)
-        .halign(gtk::Align::Fill)
-        .visible(false)
-        .build();
-    focus_nudge_row.add_css_class("card-control-row");
-    focus_nudge_row.append(&focus_alert);
-    focus_nudge_row.append(&focus_nudge_state);
     let focus_terminal_slot = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .hexpand(true)
@@ -415,7 +412,7 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
         .vexpand(true)
         .build();
     focus_content.append(&focus_header);
-    focus_content.append(&focus_nudge_row);
+    focus_content.append(&focus_alert);
     focus_content.append(&focus_terminal_slot);
     focus_content.append(&focus_bars);
 
@@ -484,8 +481,6 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
             frame: focus_frame,
             title: focus_title,
             status: focus_status,
-            nudge_row: focus_nudge_row,
-            nudge_state: focus_nudge_state,
             alert: focus_alert,
             terminal_slot: focus_terminal_slot,
             bars: focus_bars,
@@ -502,8 +497,6 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
         nudge_worker: spawn_nudge_worker(),
         nudge_cache: RefCell::new(BTreeMap::new()),
     });
-
-    install_focus_nudge_pill_interactions(&context, &context.focus.nudge_state);
 
     {
         let cards = context.cards.clone();
@@ -758,7 +751,12 @@ fn build_battle_card_widgets(
         .xalign(0.5)
         .css_classes(vec!["card-control-state".to_string(), "card-control-off".to_string()])
         .build();
+    nudge_state.set_single_line_mode(true);
+    nudge_state.set_wrap(false);
+    nudge_state.set_hexpand(false);
+    nudge_state.set_vexpand(false);
     nudge_state.set_halign(gtk::Align::End);
+    nudge_state.set_valign(gtk::Align::Center);
     let nudge_row = gtk::Box::builder()
         .orientation(gtk::Orientation::Horizontal)
         .spacing(8)
@@ -766,6 +764,7 @@ fn build_battle_card_widgets(
         .halign(gtk::Align::Fill)
         .visible(false)
         .build();
+    nudge_row.set_valign(gtk::Align::Center);
     nudge_row.add_css_class("card-control-row");
     nudge_row.append(&nudge_state);
     let recency = gtk::Label::builder()
@@ -787,27 +786,6 @@ fn build_battle_card_widgets(
         .visible(false)
         .css_classes(vec!["card-detail".to_string()])
         .build();
-    let evidence_one = gtk::Label::builder()
-        .xalign(0.0)
-        .visible(false)
-        .css_classes(vec!["card-scrollback-line".to_string()])
-        .build();
-    evidence_one.set_single_line_mode(true);
-    evidence_one.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    let evidence_two = gtk::Label::builder()
-        .xalign(0.0)
-        .visible(false)
-        .css_classes(vec!["card-scrollback-line".to_string()])
-        .build();
-    evidence_two.set_single_line_mode(true);
-    evidence_two.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    let evidence_three = gtk::Label::builder()
-        .xalign(0.0)
-        .visible(false)
-        .css_classes(vec!["card-scrollback-line".to_string()])
-        .build();
-    evidence_three.set_single_line_mode(true);
-    evidence_three.set_ellipsize(gtk::pango::EllipsizeMode::End);
     let alert = gtk::Label::builder()
         .xalign(0.0)
         .wrap(true)
@@ -854,9 +832,6 @@ fn build_battle_card_widgets(
         .valign(gtk::Align::Fill)
         .build();
     scrollback_band.add_css_class("card-scrollback-band");
-    scrollback_band.append(&evidence_one);
-    scrollback_band.append(&evidence_two);
-    scrollback_band.append(&evidence_three);
     let terminal_slot = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .hexpand(true)
@@ -1019,9 +994,6 @@ fn build_battle_card_widgets(
         bars,
         headline,
         detail,
-        evidence_one,
-        evidence_two,
-        evidence_three,
         alert,
         momentum_bar,
         risk_bar,
@@ -1141,40 +1113,6 @@ fn install_nudge_pill_interactions(
         let context = context.clone();
         motion.connect_leave(move |_| {
             set_auto_nudge_hover(&context, session_id, false);
-        });
-    }
-    pill.add_controller(motion);
-}
-
-fn install_focus_nudge_pill_interactions(context: &Rc<AppContext>, pill: &gtk::Label) {
-    let click = gtk::GestureClick::new();
-    click.set_button(1);
-    {
-        let context = context.clone();
-        click.connect_released(move |gesture, _, _, _| {
-            if let Some(session_id) = context.state.borrow().focused_session() {
-                toggle_auto_nudge(&context, session_id);
-                gesture.set_state(gtk::EventSequenceState::Claimed);
-            }
-        });
-    }
-    pill.add_controller(click);
-
-    let motion = gtk::EventControllerMotion::new();
-    {
-        let context = context.clone();
-        motion.connect_enter(move |_, _, _| {
-            if let Some(session_id) = context.state.borrow().focused_session() {
-                set_auto_nudge_hover(&context, session_id, true);
-            }
-        });
-    }
-    {
-        let context = context.clone();
-        motion.connect_leave(move |_| {
-            if let Some(session_id) = context.state.borrow().focused_session() {
-                set_auto_nudge_hover(&context, session_id, false);
-            }
         });
     }
     pill.add_controller(motion);
@@ -1402,7 +1340,6 @@ fn refresh_runtime_and_cards(context: &Rc<AppContext>) {
     drain_naming_results(context);
     drain_nudge_results(context);
     drain_runtime_events(context);
-    sync_runtime_sizes(context);
     update_flowbox_columns(context);
     let sessions = context.state.borrow().sessions().to_vec();
     for session in &sessions {
@@ -1415,6 +1352,7 @@ fn refresh_runtime_and_cards(context: &Rc<AppContext>) {
     refresh_workspace(context);
     refresh_card_styles(context);
     refresh_focus_panel(context);
+    sync_runtime_sizes(context);
 }
 
 fn drain_naming_results(context: &Rc<AppContext>) {
@@ -1712,16 +1650,11 @@ fn update_battle_card_widgets(context: &Rc<AppContext>, session: &crate::model::
         .set_label(card_model.primary_detail.as_deref().unwrap_or(""));
     card.detail.set_visible(card_model.primary_detail.is_some());
 
-    let scrollback = scrollback_fragments(observation);
-    let evidence_one = scrollback.first().map(String::as_str).unwrap_or(" ");
-    let evidence_two = scrollback.get(1).map(String::as_str).unwrap_or(" ");
-    let evidence_three = scrollback.get(2).map(String::as_str).unwrap_or(" ");
-    card.evidence_one.set_label(evidence_one);
-    card.evidence_two.set_label(evidence_two);
-    card.evidence_three.set_label(evidence_three);
-    card.evidence_one.set_visible(true);
-    card.evidence_two.set_visible(true);
-    card.evidence_three.set_visible(true);
+    let scrollback = scrollback_fragments(
+        observation,
+        visible_scrollback_line_capacity(&card.scrollback_band),
+    );
+    repopulate_scrollback_band(&card.scrollback_band, &scrollback);
     card.scrollback_band.set_visible(true);
 
     apply_metric_widgets(
@@ -1737,8 +1670,11 @@ fn update_battle_card_widgets(context: &Rc<AppContext>, session: &crate::model::
         .unwrap_or_default();
     card.alert.set_label(&operator_summary);
     card.alert.set_visible(!operator_summary.is_empty());
-    card.nudge_row.set_visible(true);
-    apply_nudge_pill(&context.nudge_cache.borrow(), session.id, &card.nudge_state);
+    let in_focus_mode = context.state.borrow().focused_session().is_some();
+    card.nudge_row.set_visible(!in_focus_mode);
+    if !in_focus_mode {
+        apply_nudge_pill(&context.nudge_cache.borrow(), session.id, &card.nudge_state);
+    }
 }
 
 fn maybe_queue_summary(context: &Rc<AppContext>, session_id: SessionId, evidence: &TacticalEvidence) {
@@ -1763,9 +1699,10 @@ fn maybe_queue_summary(context: &Rc<AppContext>, session_id: SessionId, evidence
         return;
     }
 
+    let refresh_interval = summary_refresh_interval(entry.first_seen.elapsed());
     if entry
         .last_attempt
-        .is_some_and(|attempt| attempt.elapsed() < Duration::from_secs(5))
+        .is_some_and(|attempt| attempt.elapsed() < refresh_interval)
     {
         return;
     }
@@ -2406,12 +2343,6 @@ fn refresh_focus_panel(context: &Rc<AppContext>) {
         .unwrap_or_default();
     context.focus.alert.set_label(&operator_summary);
     context.focus.alert.set_visible(!operator_summary.is_empty());
-    context.focus.nudge_row.set_visible(true);
-    apply_nudge_pill(
-        &context.nudge_cache.borrow(),
-        session.id,
-        &context.focus.nudge_state,
-    );
     context.focus.bars.set_orientation(gtk::Orientation::Horizontal);
     apply_segmented_bar(
         &context.focus.momentum_bar,
@@ -2516,12 +2447,46 @@ fn update_nudge_widgets(context: &Rc<AppContext>, session_id: SessionId) {
     if let Some(card) = context.session_cards.borrow().get(&session_id) {
         apply_nudge_pill(&context.nudge_cache.borrow(), session_id, &card.nudge_state);
     }
-    if context.state.borrow().focused_session() == Some(session_id) {
-        apply_nudge_pill(
-            &context.nudge_cache.borrow(),
-            session_id,
-            &context.focus.nudge_state,
-        );
+}
+
+fn visible_scrollback_line_capacity(scrollback_band: &gtk::Box) -> usize {
+    const SCROLLBACK_VERTICAL_PADDING: i32 = 16;
+    const SCROLLBACK_LINE_HEIGHT: i32 = 14;
+    const SCROLLBACK_LINE_SPACING: i32 = 4;
+    const MIN_SCROLLBACK_LINES: usize = 1;
+
+    let height = scrollback_band.height();
+    if height <= 0 {
+        return 3;
+    }
+
+    let usable_height = (height - SCROLLBACK_VERTICAL_PADDING).max(SCROLLBACK_LINE_HEIGHT);
+    let line_block = SCROLLBACK_LINE_HEIGHT + SCROLLBACK_LINE_SPACING;
+    let lines = ((usable_height + SCROLLBACK_LINE_SPACING) / line_block).max(1);
+    (lines as usize).max(MIN_SCROLLBACK_LINES)
+}
+
+fn repopulate_scrollback_band(scrollback_band: &gtk::Box, lines: &[String]) {
+    while let Some(child) = scrollback_band.first_child() {
+        scrollback_band.remove(&child);
+    }
+
+    let items = if lines.is_empty() {
+        vec![" ".to_string()]
+    } else {
+        lines.to_vec()
+    };
+
+    for line in items {
+        let label = gtk::Label::builder()
+            .xalign(0.0)
+            .visible(true)
+            .css_classes(vec!["card-scrollback-line".to_string()])
+            .build();
+        label.set_single_line_mode(true);
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        label.set_label(&line);
+        scrollback_band.append(&label);
     }
 }
 
@@ -2990,48 +2955,48 @@ fn load_css() {
         }
 
         .card-idle {
-            background: linear-gradient(180deg, rgba(23, 27, 33, 0.98) 0%, rgba(13, 16, 21, 0.97) 100%);
-            border-color: rgba(148, 163, 184, 0.24);
+            background: linear-gradient(180deg, rgba(21, 24, 30, 0.98) 0%, rgba(12, 14, 19, 0.97) 100%);
+            border-color: rgba(21, 24, 30, 0.96);
         }
 
         .card-stopped {
-            background: linear-gradient(180deg, rgba(60, 48, 12, 0.98) 0%, rgba(26, 23, 10, 0.97) 100%);
-            border-color: rgba(250, 204, 21, 0.42);
+            background: linear-gradient(180deg, rgba(54, 43, 11, 0.98) 0%, rgba(23, 21, 9, 0.97) 100%);
+            border-color: rgba(54, 43, 11, 0.96);
         }
 
         .card-active {
-            background: linear-gradient(180deg, rgba(16, 37, 58, 0.98) 0%, rgba(10, 20, 34, 0.97) 100%);
-            border-color: rgba(96, 165, 250, 0.34);
+            background: linear-gradient(180deg, rgba(14, 33, 52, 0.98) 0%, rgba(9, 18, 31, 0.97) 100%);
+            border-color: rgba(14, 33, 52, 0.96);
         }
 
         .card-thinking {
-            background: linear-gradient(180deg, rgba(10, 49, 32, 0.98) 0%, rgba(10, 25, 18, 0.97) 100%);
-            border-color: rgba(74, 222, 128, 0.34);
+            background: linear-gradient(180deg, rgba(9, 44, 29, 0.98) 0%, rgba(9, 23, 16, 0.97) 100%);
+            border-color: rgba(9, 44, 29, 0.96);
         }
 
         .card-working {
-            background: linear-gradient(180deg, rgba(10, 49, 32, 0.98) 0%, rgba(10, 25, 18, 0.97) 100%);
-            border-color: rgba(74, 222, 128, 0.34);
+            background: linear-gradient(180deg, rgba(9, 44, 29, 0.98) 0%, rgba(9, 23, 16, 0.97) 100%);
+            border-color: rgba(9, 44, 29, 0.96);
         }
 
         .card-blocked {
-            background: linear-gradient(180deg, rgba(61, 20, 24, 0.98) 0%, rgba(30, 12, 16, 0.97) 100%);
-            border-color: rgba(248, 113, 113, 0.38);
+            background: linear-gradient(180deg, rgba(55, 18, 22, 0.98) 0%, rgba(27, 11, 14, 0.97) 100%);
+            border-color: rgba(55, 18, 22, 0.96);
         }
 
         .card-failed {
-            background: linear-gradient(180deg, rgba(61, 20, 24, 0.98) 0%, rgba(30, 12, 16, 0.97) 100%);
-            border-color: rgba(248, 113, 113, 0.38);
+            background: linear-gradient(180deg, rgba(55, 18, 22, 0.98) 0%, rgba(27, 11, 14, 0.97) 100%);
+            border-color: rgba(55, 18, 22, 0.96);
         }
 
         .card-complete {
-            background: linear-gradient(180deg, rgba(12, 44, 45, 0.98) 0%, rgba(8, 22, 24, 0.97) 100%);
-            border-color: rgba(94, 234, 212, 0.34);
+            background: linear-gradient(180deg, rgba(11, 40, 41, 0.98) 0%, rgba(7, 20, 22, 0.97) 100%);
+            border-color: rgba(11, 40, 41, 0.96);
         }
 
         .card-detached {
-            background: linear-gradient(180deg, rgba(40, 20, 57, 0.98) 0%, rgba(18, 10, 28, 0.97) 100%);
-            border-color: rgba(192, 132, 252, 0.34);
+            background: linear-gradient(180deg, rgba(36, 18, 51, 0.98) 0%, rgba(16, 9, 25, 0.97) 100%);
+            border-color: rgba(36, 18, 51, 0.96);
         }
 
         .battle-idle {
@@ -3150,7 +3115,8 @@ fn load_css() {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_run_mode, RunMode};
+    use super::{parse_run_mode, summary_refresh_interval, RunMode};
+    use std::time::Duration;
 
     #[test]
     fn parses_ssh_run_mode() {
@@ -3167,5 +3133,17 @@ mod tests {
     fn rejects_invalid_run_mode_args() {
         assert!(parse_run_mode(vec!["--ssh".into()]).is_err());
         assert!(parse_run_mode(vec!["--bogus".into()]).is_err());
+    }
+
+    #[test]
+    fn summary_refresh_interval_starts_fast_and_backs_off() {
+        assert_eq!(summary_refresh_interval(Duration::from_secs(0)), Duration::from_secs(5));
+        assert_eq!(summary_refresh_interval(Duration::from_secs(59)), Duration::from_secs(5));
+        assert_eq!(summary_refresh_interval(Duration::from_secs(60)), Duration::from_secs(10));
+        assert_eq!(summary_refresh_interval(Duration::from_secs(179)), Duration::from_secs(10));
+        assert_eq!(summary_refresh_interval(Duration::from_secs(180)), Duration::from_secs(20));
+        assert_eq!(summary_refresh_interval(Duration::from_secs(299)), Duration::from_secs(20));
+        assert_eq!(summary_refresh_interval(Duration::from_secs(300)), Duration::from_secs(30));
+        assert_eq!(summary_refresh_interval(Duration::from_secs(900)), Duration::from_secs(30));
     }
 }
