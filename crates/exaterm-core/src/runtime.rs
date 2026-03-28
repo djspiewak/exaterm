@@ -1,4 +1,4 @@
-use crate::model::SessionLaunch;
+use crate::model::{launch_argv, SessionLaunch};
 use crate::terminal_stream::TerminalStreamProcessor;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::fs::File;
@@ -88,7 +88,7 @@ pub fn spawn_headless_runtime(
 }
 
 fn command_builder(launch: &SessionLaunch) -> CommandBuilder {
-    let argv_owned = launch.argv();
+    let argv_owned = launch_argv(launch);
     let mut builder = CommandBuilder::new(&argv_owned[0]);
     for arg in argv_owned.iter().skip(1) {
         builder.arg(arg);

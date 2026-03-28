@@ -44,9 +44,7 @@ fn dominant_child_command_from_entries(
     entries: &BTreeMap<u32, ProcessEntry>,
     root_pid: u32,
 ) -> Option<String> {
-    let Some(root) = entries.get(&root_pid) else {
-        return None;
-    };
+    let root = entries.get(&root_pid)?;
 
     let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     for entry in entries.values() {
@@ -78,9 +76,7 @@ fn direct_child_command_from_entries(
     entries: &BTreeMap<u32, ProcessEntry>,
     root_pid: u32,
 ) -> Option<String> {
-    let Some(root) = entries.get(&root_pid) else {
-        return None;
-    };
+    let root = entries.get(&root_pid)?;
 
     let mut child_pids = entries
         .values()

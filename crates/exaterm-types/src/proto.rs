@@ -1,6 +1,5 @@
 use crate::model::{SessionId, SessionRecord};
 use crate::synthesis::TacticalSynthesis;
-use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -66,27 +65,9 @@ pub struct ObservationSnapshot {
     pub work_output_excerpt: Option<String>,
 }
 
-pub fn encode_bytes(bytes: &[u8]) -> String {
-    base64::engine::general_purpose::STANDARD.encode(bytes)
-}
-
-pub fn decode_bytes(bytes_b64: &str) -> Result<Vec<u8>, String> {
-    base64::engine::general_purpose::STANDARD
-        .decode(bytes_b64)
-        .map_err(|error| error.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn bytes_round_trip_through_base64_helpers() {
-        let source = b"\x1b[2K\rWorking...\n";
-        let encoded = encode_bytes(source);
-        let decoded = decode_bytes(&encoded).expect("decode bytes");
-        assert_eq!(decoded, source);
-    }
 
     #[test]
     fn client_message_round_trips_through_json() {

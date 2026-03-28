@@ -5,7 +5,7 @@ all: build
 build:
 	cargo build -p exaterm -p exatermd
 
-run:
+run: build
 	cargo run -p exaterm
 
 daemon:
@@ -34,8 +34,8 @@ clean:
 
 help:
 	@printf '%s\n' \
-		'make            Build the GTK app (exaterm)' \
-		'make run        Run the GTK app' \
+		'make            Build exaterm and exatermd' \
+		'make run        Build exaterm/exatermd, then run the GTK app' \
 		'make daemon     Run the daemon directly' \
 		'make check      cargo check for the GTK app' \
 		'make test       Run app-package tests' \

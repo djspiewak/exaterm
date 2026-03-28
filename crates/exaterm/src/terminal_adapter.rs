@@ -1,6 +1,7 @@
-use exaterm_types::model::SessionLaunch;
+use exaterm_core::model::launch_argv;
 use exaterm_core::runtime::{RuntimeEvent, SessionRuntime, SpawnedRuntime, StreamRuntimeUpdate};
 use exaterm_core::terminal_stream::TerminalStreamProcessor;
+use exaterm_types::model::SessionLaunch;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -367,7 +368,7 @@ fn consume_relay_buffer(buffer: &mut Vec<u8>, amount: usize) {
 }
 
 fn command_builder(launch: &SessionLaunch) -> CommandBuilder {
-    let argv_owned = launch.argv();
+    let argv_owned = launch_argv(launch);
     let mut builder = CommandBuilder::new(&argv_owned[0]);
     for arg in argv_owned.iter().skip(1) {
         builder.arg(arg);
