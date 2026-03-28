@@ -257,7 +257,7 @@ struct AppContext {
     empty_state: gtk::Box,
     content_root: gtk::Box,
     cards: gtk::FlowBox,
-    battlefield_scroller: gtk::ScrolledWindow,
+    battlefield_panel: gtk::Box,
     focus: FocusWidgets,
     session_cards: RefCell<BTreeMap<SessionId, SessionCardWidgets>>,
     observations: RefCell<BTreeMap<SessionId, SessionObservation>>,
@@ -352,13 +352,12 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
         .valign(gtk::Align::Fill)
         .build();
 
-    let battlefield_scroller = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .vscrollbar_policy(gtk::PolicyType::Automatic)
-        .child(&cards)
+    let battlefield_panel = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
         .hexpand(true)
         .vexpand(true)
         .build();
+    battlefield_panel.append(&cards);
 
     let empty_title = gtk::Label::builder()
         .label("No Live Sessions Yet")
@@ -498,7 +497,7 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
         .build();
     content_root.add_css_class("battlefield-root");
     content_root.append(&empty_state);
-    content_root.append(&battlefield_scroller);
+    content_root.append(&battlefield_panel);
     content_root.append(&focus_panel);
 
     let body = gtk::Box::builder()
@@ -524,7 +523,7 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
         empty_state,
         content_root,
         cards,
-        battlefield_scroller,
+        battlefield_panel,
         focus: FocusWidgets {
             panel: focus_panel,
             frame: focus_frame,
@@ -1030,14 +1029,52 @@ fn build_battle_card_widgets(
     header.append(&header_left);
     header.append(&header_right);
 
-    let scrollback_band = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
-        .spacing(4)
+    let scrollback_lines = Rc::new(RefCell::new(Vec::<String>::new()));
+    let scrollback_content = gtk::DrawingArea::builder()
         .hexpand(true)
         .vexpand(true)
-        .valign(gtk::Align::Fill)
         .build();
-    scrollback_band.add_css_class("card-scrollback-band");
+    scrollback_content.set_content_width(0);
+    scrollback_content.set_content_height(0);
+    {
+        let scrollback_lines = scrollback_lines.clone();
+        scrollback_content.set_draw_func(move |area, cr, width, height| {
+            const H_MARGIN: i32 = 10;
+            const V_MARGIN: i32 = 8;
+
+            let text = {
+                let lines = scrollback_lines.borrow();
+                if lines.is_empty() {
+                    " ".to_string()
+                } else {
+                    lines.join("\n")
+                }
+            };
+
+            let layout = area.create_pango_layout(Some(&text));
+            layout.set_font_description(Some(&gtk::pango::FontDescription::from_string(
+                "Monospace 7",
+            )));
+            layout.set_spacing(4 * gtk::pango::SCALE);
+            layout.set_width(((width - (H_MARGIN * 2)).max(0)) * gtk::pango::SCALE);
+
+            let (_, text_height) = layout.pixel_size();
+            let x = H_MARGIN as f64;
+            let y = (height - V_MARGIN - text_height) as f64;
+
+            cr.rectangle(0.0, 0.0, width as f64, height as f64);
+            cr.clip();
+            gtk::render_layout(&area.style_context(), cr, x, y, &layout);
+        });
+    }
+    scrollback_content.add_css_class("card-scrollback-view");
+    let scrollback_band = gtk::Frame::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .child(&scrollback_content)
+        .build();
+    scrollback_band.set_overflow(gtk::Overflow::Hidden);
+    scrollback_band.add_css_class("card-scrollback-frame");
     let terminal_slot = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .hexpand(true)
@@ -1203,6 +1240,8 @@ fn build_battle_card_widgets(
         recency,
         middle_stack,
         scrollback_band,
+        scrollback_content,
+        scrollback_lines,
         terminal_slot,
         bars,
         headline,
@@ -2084,9 +2123,9 @@ fn update_battle_card_widgets(
 
     let scrollback = scrollback_fragments(
         observation,
-        visible_scrollback_line_capacity(&card.scrollback_band),
+        visible_scrollback_line_capacity(card.scrollback_band.height()),
     );
-    repopulate_scrollback_band(&card.scrollback_band, &scrollback);
+    repopulate_scrollback_band(&card.scrollback_content, &card.scrollback_lines, &scrollback);
     card.scrollback_band.set_visible(true);
 
     apply_metric_widgets(
@@ -2524,7 +2563,7 @@ fn refresh_workspace(context: &Rc<AppContext>) {
 
     let is_empty = sessions.is_empty();
     context.empty_state.set_visible(is_empty);
-    context.battlefield_scroller.set_visible(!is_empty);
+    context.battlefield_panel.set_visible(!is_empty);
     let state = context.state.borrow();
     let _ = (sessions, idle, active, failed, state);
     context.title.set_subtitle("");
@@ -2595,11 +2634,8 @@ fn show_intervention(context: &Rc<AppContext>, session_id: SessionId) {
     }
     context.focus.panel.set_visible(true);
     context.content_root.add_css_class("focus-mode");
-    context.battlefield_scroller.set_vexpand(false);
-    context.battlefield_scroller.set_hscrollbar_policy(gtk::PolicyType::Automatic);
-    context.battlefield_scroller.set_vscrollbar_policy(gtk::PolicyType::Never);
-    context.battlefield_scroller.set_min_content_height(252);
-    context.battlefield_scroller.set_max_content_height(300);
+    context.battlefield_panel.set_vexpand(false);
+    context.battlefield_panel.set_height_request(300);
     update_flowbox_columns(context);
     sync_terminal_parents(context);
     refresh_card_styles(context);
@@ -2612,11 +2648,8 @@ fn show_battlefield(context: &Rc<AppContext>) {
     context.state.borrow_mut().return_to_battlefield();
     context.focus.panel.set_visible(false);
     context.content_root.remove_css_class("focus-mode");
-    context.battlefield_scroller.set_vexpand(true);
-    context.battlefield_scroller.set_hscrollbar_policy(gtk::PolicyType::Never);
-    context.battlefield_scroller.set_vscrollbar_policy(gtk::PolicyType::Automatic);
-    context.battlefield_scroller.set_min_content_height(0);
-    context.battlefield_scroller.set_max_content_height(-1);
+    context.battlefield_panel.set_vexpand(true);
+    context.battlefield_panel.set_height_request(-1);
     update_flowbox_columns(context);
     sync_terminal_parents(context);
     refresh_card_styles(context);
@@ -2694,7 +2727,7 @@ fn update_flowbox_columns(context: &Rc<AppContext>) {
         return;
     }
 
-    let available_width = context.battlefield_scroller.width();
+    let available_width = context.battlefield_panel.width();
     let columns = battlefield_columns(
         total,
         available_width,
@@ -2715,8 +2748,8 @@ fn battlefield_embeds_terminal(context: &Rc<AppContext>, _session_id: SessionId)
     }
 
     let columns = current_battlefield_columns(context).max(1);
-    let available_width = context.battlefield_scroller.width();
-    let available_height = context.battlefield_scroller.height();
+    let available_width = context.battlefield_panel.width();
+    let available_height = context.battlefield_panel.height();
     battlefield_can_embed_terminals(total, columns, available_width, available_height)
 }
 
@@ -2764,32 +2797,22 @@ fn schedule_runtime_size_sync(context: &Rc<AppContext>) {
     });
 }
 
-fn visible_scrollback_line_capacity(scrollback_band: &gtk::Box) -> usize {
-    layout_visible_scrollback_line_capacity(scrollback_band.height())
+fn visible_scrollback_line_capacity(height: i32) -> usize {
+    layout_visible_scrollback_line_capacity(height)
 }
 
-fn repopulate_scrollback_band(scrollback_band: &gtk::Box, lines: &[String]) {
-    while let Some(child) = scrollback_band.first_child() {
-        scrollback_band.remove(&child);
-    }
-
+fn repopulate_scrollback_band(
+    scrollback_band: &gtk::DrawingArea,
+    scrollback_lines: &Rc<RefCell<Vec<String>>>,
+    lines: &[String],
+) {
     let items = if lines.is_empty() {
         vec![" ".to_string()]
     } else {
         lines.to_vec()
     };
-
-    for line in items {
-        let label = gtk::Label::builder()
-            .xalign(0.0)
-            .visible(true)
-            .css_classes(vec!["card-scrollback-line".to_string()])
-            .build();
-        label.set_single_line_mode(true);
-        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        label.set_label(&line);
-        scrollback_band.append(&label);
-    }
+    *scrollback_lines.borrow_mut() = items;
+    scrollback_band.queue_draw();
 }
 
 fn apply_nudge_pill(

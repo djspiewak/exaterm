@@ -1,3 +1,5 @@
+use std::{cell::RefCell, rc::Rc};
+
 use gtk::prelude::*;
 use vte4 as vte;
 
@@ -20,7 +22,9 @@ pub(crate) struct SessionCardWidgets {
     pub nudge_state: gtk::Label,
     pub recency: gtk::Label,
     pub middle_stack: gtk::Stack,
-    pub scrollback_band: gtk::Box,
+    pub scrollback_band: gtk::Frame,
+    pub scrollback_content: gtk::DrawingArea,
+    pub scrollback_lines: Rc<RefCell<Vec<String>>>,
     pub terminal_slot: gtk::Box,
     pub bars: gtk::Box,
     pub headline: gtk::Label,

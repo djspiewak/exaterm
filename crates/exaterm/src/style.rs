@@ -165,12 +165,10 @@ pub(crate) fn load_css() {
             border-radius: 20px;
             border: 1px solid rgba(120, 136, 158, 0.2);
             background: rgba(7, 13, 20, 0.96);
-            min-height: 0;
             padding: 10px;
         }
 
         .card-terminal-slot.scrollback-terminal-hidden {
-            min-height: 0;
             padding: 0;
             border-color: transparent;
             background: transparent;
@@ -189,17 +187,23 @@ pub(crate) fn load_css() {
             margin-top: 0;
         }
 
-        .card-scrollback-band {
+        .card-scrollback-frame {
             border-radius: 14px;
             border: 1px solid rgba(173, 188, 204, 0.08);
             background: rgba(8, 14, 22, 0.34);
-            padding: 8px 10px;
-            min-height: 0;
         }
 
-        .card-scrollback-line {
+        .card-scrollback-view {
+            background: transparent;
             color: rgba(202, 214, 227, 0.88);
-            font-size: 11px;
+            font-size: 7pt;
+            line-height: 1.1;
+        }
+
+        .card-scrollback-view text {
+            background: transparent;
+            color: rgba(202, 214, 227, 0.88);
+            font-size: 7pt;
             font-family: Monospace;
             line-height: 1.1;
         }
