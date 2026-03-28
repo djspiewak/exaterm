@@ -249,6 +249,11 @@ pub(crate) fn load_css() {
             line-height: 1.18;
         }
 
+        .focus-headline {
+            font-size: 16px;
+            line-height: 1.2;
+        }
+
         .card-evidence {
             color: rgba(198, 212, 227, 0.88);
             font-size: 12px;
@@ -313,6 +318,41 @@ pub(crate) fn load_css() {
             color: #93c5fd;
             background: rgba(33, 82, 145, 0.22);
             border-color: rgba(96, 165, 250, 0.2);
+        }
+
+        .focus-attention-pill {
+            color: #f8fafc;
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            border-radius: 999px;
+            padding: 5px 14px;
+        }
+
+        .focus-attention-1 {
+            background: rgba(17, 88, 51, 0.24);
+            border: 1px solid rgba(74, 222, 128, 0.22);
+        }
+
+        .focus-attention-2 {
+            background: rgba(33, 82, 145, 0.24);
+            border: 1px solid rgba(96, 165, 250, 0.22);
+        }
+
+        .focus-attention-3 {
+            background: rgba(120, 87, 10, 0.24);
+            border: 1px solid rgba(250, 204, 21, 0.24);
+        }
+
+        .focus-attention-4 {
+            background: rgba(127, 29, 29, 0.28);
+            border: 1px solid rgba(248, 113, 113, 0.26);
+        }
+
+        .focus-attention-5 {
+            background: rgba(136, 19, 55, 0.3);
+            border: 1px solid rgba(244, 63, 94, 0.28);
         }
 
         .bar-widget {
@@ -508,7 +548,7 @@ pub(crate) fn load_css() {
 
         .focus-mode flowboxchild .battle-card {
             min-width: 176px;
-            min-height: 182px;
+            min-height: 146px;
             border-radius: 18px;
             box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
         }
@@ -523,7 +563,7 @@ pub(crate) fn load_css() {
         }
 
         .focus-mode flowboxchild .card-header-row {
-            min-height: 28px;
+            min-height: 22px;
         }
 
         .focus-mode flowboxchild .card-bottom-stack {
@@ -538,7 +578,7 @@ pub(crate) fn load_css() {
             padding: 0;
             background: transparent;
             border-color: transparent;
-            min-height: 112px;
+            min-height: 90px;
             margin-top: 6px;
             margin-bottom: 0;
             margin-left: 0;

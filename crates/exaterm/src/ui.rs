@@ -244,7 +244,7 @@ fn card_chrome_visibility(
     let status_visible = summarized;
     CardChromeVisibility {
         title_visible,
-        headline_visible: summarized && !focus_mode,
+        headline_visible: summarized,
         status_visible,
         header_visible: title_visible || status_visible,
         bars_visible: summarized && !focus_mode,
@@ -261,7 +261,7 @@ pub(crate) struct AppContext {
     empty_state: gtk::Box,
     content_root: gtk::Box,
     cards: gtk::FlowBox,
-    battlefield_panel: gtk::Box,
+    battlefield_panel: gtk::ScrolledWindow,
     pub(crate) sync_inputs_enabled: Arc<AtomicBool>,
     pub(crate) raw_input_writers: Arc<Mutex<BTreeMap<SessionId, Arc<Mutex<UnixStream>>>>>,
     focus: FocusWidgets,
@@ -358,12 +358,13 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
         .valign(gtk::Align::Fill)
         .build();
 
-    let battlefield_panel = gtk::Box::builder()
-        .orientation(gtk::Orientation::Vertical)
+    let battlefield_panel = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Never)
         .hexpand(true)
         .vexpand(true)
+        .child(&cards)
         .build();
-    battlefield_panel.append(&cards);
 
     let empty_title = gtk::Label::builder()
         .label("No Live Sessions Yet")
@@ -395,11 +396,30 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
         .xalign(0.0)
         .css_classes(vec!["card-title".to_string()])
         .build();
+    focus_title.set_single_line_mode(true);
+    focus_title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    focus_title.set_max_width_chars(18);
     let focus_status = gtk::Label::builder()
         .xalign(0.5)
         .css_classes(vec!["card-status".to_string(), "battle-active".to_string()])
         .label("Active")
         .build();
+    let focus_headline = gtk::Label::builder()
+        .xalign(0.0)
+        .wrap(true)
+        .hexpand(true)
+        .visible(false)
+        .css_classes(vec!["card-headline".to_string(), "focus-headline".to_string()])
+        .build();
+    focus_headline.set_lines(2);
+    focus_headline.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    focus_headline.set_max_width_chars(30);
+    let focus_attention_pill = gtk::Label::builder()
+        .xalign(0.0)
+        .visible(false)
+        .css_classes(vec!["focus-attention-pill".to_string()])
+        .build();
+    focus_attention_pill.set_valign(gtk::Align::End);
     let focus_alert = gtk::Label::builder()
         .xalign(0.0)
         .wrap(true)
@@ -453,6 +473,17 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
     focus_bars.append(&focus_momentum_bar.frame);
     focus_bars.append(&focus_risk_bar.frame);
 
+    let focus_summary_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .hexpand(true)
+        .vexpand(true)
+        .visible(false)
+        .build();
+    focus_summary_box.add_css_class("focus-summary-box");
+    focus_summary_box.append(&focus_headline);
+    focus_summary_box.append(&focus_attention_pill);
+
     let focus_content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(8)
@@ -464,6 +495,7 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
         .vexpand(true)
         .build();
     focus_content.append(&focus_header);
+    focus_content.append(&focus_summary_box);
     focus_content.append(&focus_alert);
     focus_content.append(&focus_terminal_slot);
     focus_content.append(&focus_bars);
@@ -479,7 +511,7 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
     let focus_panel = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(10)
-        .margin_top(18)
+        .margin_top(8)
         .margin_bottom(18)
         .margin_start(18)
         .margin_end(18)
@@ -538,6 +570,9 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
             header: focus_header,
             title: focus_title,
             status: focus_status,
+            summary_box: focus_summary_box,
+            headline: focus_headline,
+            attention_pill: focus_attention_pill,
             alert: focus_alert,
             terminal_slot: focus_terminal_slot,
             bars: focus_bars,
@@ -989,6 +1024,7 @@ fn build_battle_card_widgets(
         .build();
     headline.set_lines(2);
     headline.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    headline.set_max_width_chars(18);
     let alert = gtk::Label::builder()
         .xalign(0.0)
         .wrap(true)
@@ -1009,6 +1045,15 @@ fn build_battle_card_widgets(
     headline_row.set_valign(gtk::Align::Start);
     headline_row.append(&headline);
     headline_row.append(&nudge_row);
+    let attention_pill = gtk::Label::builder()
+        .xalign(0.0)
+        .visible(false)
+        .css_classes(vec![
+            "focus-attention-pill".to_string(),
+            "rail-attention-pill".to_string(),
+        ])
+        .build();
+    attention_pill.set_valign(gtk::Align::End);
     let momentum_bar = build_segmented_bar("Attention Condition");
     let risk_bar = build_segmented_bar("Unused");
 
@@ -1135,6 +1180,7 @@ fn build_battle_card_widgets(
         .build();
     content.append(&header);
     content.append(&headline_row);
+    content.append(&attention_pill);
     content.append(&middle_stack);
     content.append(&footer);
 
@@ -1245,6 +1291,7 @@ fn build_battle_card_widgets(
         title,
         status,
         headline_row,
+        attention_pill,
         nudge_row,
         nudge_state,
         recency,
@@ -1253,6 +1300,7 @@ fn build_battle_card_widgets(
         scrollback_content,
         scrollback_lines,
         terminal_slot,
+        footer,
         bars,
         headline,
         alert,
@@ -2473,6 +2521,89 @@ fn attention_bar_value(summary: Option<&TacticalSynthesis>) -> Option<(usize, &'
     None
 }
 
+fn apply_focus_attention_pill(pill: &gtk::Label, summary: Option<&TacticalSynthesis>) {
+    for css in [
+        "focus-attention-1",
+        "focus-attention-2",
+        "focus-attention-3",
+        "focus-attention-4",
+        "focus-attention-5",
+    ] {
+        pill.remove_css_class(css);
+    }
+
+    let Some(summary) = summary else {
+        pill.set_visible(false);
+        pill.set_label("");
+        pill.set_tooltip_text(None::<&str>);
+        return;
+    };
+
+    let (label, css) = match summary.attention_level {
+        AttentionLevel::Autopilot => ("AUTOPILOT", "focus-attention-1"),
+        AttentionLevel::Monitor => ("MONITOR", "focus-attention-2"),
+        AttentionLevel::Guide => ("GUIDE", "focus-attention-3"),
+        AttentionLevel::Intervene => ("INTERVENE", "focus-attention-4"),
+        AttentionLevel::Takeover => ("TAKEOVER", "focus-attention-5"),
+    };
+    pill.set_label(label);
+    pill.add_css_class(css);
+    pill.set_tooltip_text(summary.attention_brief.as_deref());
+    pill.set_visible(true);
+}
+
+fn combined_focus_summary_text(
+    headline: &str,
+    attention_brief: Option<&str>,
+) -> String {
+    let headline = headline.trim();
+    let attention_brief = attention_brief.unwrap_or("").trim();
+    match (headline.is_empty(), attention_brief.is_empty()) {
+        (false, false) => {
+            let separator = if headline.ends_with('.') || headline.ends_with('!') || headline.ends_with('?') {
+                " "
+            } else {
+                ". "
+            };
+            format!("{headline}{separator}{attention_brief}")
+        }
+        (false, true) => headline.to_string(),
+        (true, false) => attention_brief.to_string(),
+        (true, true) => String::new(),
+    }
+}
+
+fn apply_attention_pill(pill: &gtk::Label, summary: Option<&TacticalSynthesis>) {
+    for css in [
+        "focus-attention-1",
+        "focus-attention-2",
+        "focus-attention-3",
+        "focus-attention-4",
+        "focus-attention-5",
+    ] {
+        pill.remove_css_class(css);
+    }
+
+    let Some(summary) = summary else {
+        pill.set_visible(false);
+        pill.set_label("");
+        pill.set_tooltip_text(None::<&str>);
+        return;
+    };
+
+    let (label, css) = match summary.attention_level {
+        AttentionLevel::Autopilot => ("AUTOPILOT", "focus-attention-1"),
+        AttentionLevel::Monitor => ("MONITOR", "focus-attention-2"),
+        AttentionLevel::Guide => ("GUIDE", "focus-attention-3"),
+        AttentionLevel::Intervene => ("INTERVENE", "focus-attention-4"),
+        AttentionLevel::Takeover => ("TAKEOVER", "focus-attention-5"),
+    };
+    pill.set_label(label);
+    pill.add_css_class(css);
+    pill.set_tooltip_text(summary.attention_brief.as_deref());
+    pill.set_visible(true);
+}
+
 fn refresh_workspace(context: &Rc<AppContext>) {
     let sessions = context.state.borrow().sessions().to_vec();
     let mut idle = 0usize;
@@ -2511,6 +2642,8 @@ fn refresh_workspace(context: &Rc<AppContext>) {
 }
 
 fn refresh_card_styles(context: &Rc<AppContext>) {
+    const FOCUS_RAIL_CARD_WIDTH: i32 = 168;
+
     let selected = context.state.borrow().selected_session();
     let focused = context.state.borrow().focused_session();
     let focus_mode = focused.is_some();
@@ -2519,11 +2652,26 @@ fn refresh_card_styles(context: &Rc<AppContext>) {
         card.row.remove_css_class("selected-card");
         card.row.remove_css_class("focused-card");
         card.frame.remove_css_class("single-card");
-        if focus_mode && selected == Some(*session_id) {
-            card.row.add_css_class("selected-card");
-        }
+    if focus_mode && selected == Some(*session_id) {
+        card.row.add_css_class("selected-card");
+    }
         if focused == Some(*session_id) {
             card.row.add_css_class("focused-card");
+        }
+        if focus_mode {
+            card.row.set_hexpand(false);
+            card.frame.set_hexpand(false);
+            card.row.set_halign(gtk::Align::Start);
+            card.frame.set_halign(gtk::Align::Start);
+            card.row.set_width_request(FOCUS_RAIL_CARD_WIDTH);
+            card.frame.set_width_request(FOCUS_RAIL_CARD_WIDTH);
+        } else {
+            card.row.set_hexpand(true);
+            card.frame.set_hexpand(true);
+            card.row.set_halign(gtk::Align::Fill);
+            card.frame.set_halign(gtk::Align::Fill);
+            card.row.set_width_request(-1);
+            card.frame.set_width_request(-1);
         }
         let chrome_visibility = card_chrome_visibility(
             card_chrome_mode_for_session(context, *session_id),
@@ -2538,6 +2686,46 @@ fn refresh_card_styles(context: &Rc<AppContext>) {
         } else {
             gtk::pango::EllipsizeMode::End
         });
+    let summary = if focus_mode {
+            let evidence = context
+                .observations
+                .borrow()
+                .get(session_id)
+                .map(|observation| build_tactical_evidence(
+                    context
+                        .state
+                        .borrow()
+                        .session(*session_id)
+                        .expect("session should exist"),
+                    observation,
+                ));
+            evidence.and_then(|evidence| current_summary(context, *session_id, &evidence))
+        } else {
+            None
+        };
+        let combined_headline = combined_focus_summary_text(
+            summary
+                .as_ref()
+                .and_then(|s| s.headline.as_deref())
+                .unwrap_or(""),
+            summary.as_ref().and_then(|s| s.attention_brief.as_deref()),
+        );
+        card.headline.set_label(&combined_headline);
+        card.headline.set_vexpand(focus_mode);
+        card.headline_row.set_vexpand(focus_mode);
+        card.headline_row.set_valign(if focus_mode {
+            gtk::Align::Fill
+        } else {
+            gtk::Align::Start
+        });
+        card.headline.set_valign(gtk::Align::Start);
+        card.headline.set_lines(if focus_mode { 4 } else { 2 });
+        apply_attention_pill(
+            &card.attention_pill,
+            if focus_mode { summary.as_ref() } else { None },
+        );
+        card.attention_pill
+            .set_visible(focus_mode && summary.is_some());
         apply_summary_chrome_visibility(card, chrome_visibility);
         let shows_terminal = battlefield_embeds_terminal(context, *session_id);
         card.bars.set_orientation(if shows_terminal {
@@ -2575,8 +2763,13 @@ fn show_intervention(context: &Rc<AppContext>, session_id: SessionId) {
     }
     context.focus.panel.set_visible(true);
     context.content_root.add_css_class("focus-mode");
+    context.cards.set_homogeneous(false);
+    context.cards.set_halign(gtk::Align::Start);
     context.battlefield_panel.set_vexpand(false);
     context.battlefield_panel.set_height_request(240);
+    context
+        .battlefield_panel
+        .set_hscrollbar_policy(gtk::PolicyType::Automatic);
     update_flowbox_columns(context);
     sync_terminal_parents(context);
     refresh_card_styles(context);
@@ -2589,8 +2782,13 @@ fn show_battlefield(context: &Rc<AppContext>) {
     context.state.borrow_mut().return_to_battlefield();
     context.focus.panel.set_visible(false);
     context.content_root.remove_css_class("focus-mode");
+    context.cards.set_homogeneous(true);
+    context.cards.set_halign(gtk::Align::Fill);
     context.battlefield_panel.set_vexpand(true);
     context.battlefield_panel.set_height_request(-1);
+    context
+        .battlefield_panel
+        .set_hscrollbar_policy(gtk::PolicyType::Never);
     update_flowbox_columns(context);
     sync_terminal_parents(context);
     refresh_card_styles(context);
@@ -2650,10 +2848,36 @@ fn refresh_focus_panel(context: &Rc<AppContext>) {
         .focus
         .header
         .set_visible(context.focus.title.is_visible() || context.focus.status.is_visible());
+    context.focus.headline.set_label(&card_model.headline);
+    context
+        .focus
+        .headline
+        .set_label(&combined_focus_summary_text(
+            &card_model.headline,
+            live_summary.as_ref().and_then(|summary| summary.attention_brief.as_deref()),
+        ));
+    context.focus.headline.set_lines(4);
+    context
+        .focus
+        .headline
+        .set_vexpand(true);
+    context
+        .focus
+        .headline
+        .set_valign(gtk::Align::Start);
+    context
+        .focus
+        .headline
+        .set_visible(chrome_mode.summarized() && !context.focus.headline.label().is_empty());
+    apply_focus_attention_pill(&context.focus.attention_pill, live_summary.as_ref());
+    context
+        .focus
+        .summary_box
+        .set_visible(context.focus.headline.is_visible() || context.focus.attention_pill.is_visible());
     context.focus.alert.set_label("");
     context.focus.alert.set_visible(false);
     context.focus.bars.set_orientation(gtk::Orientation::Horizontal);
-    context.focus.bars.set_visible(chrome_mode.summarized());
+    context.focus.bars.set_visible(false);
     apply_segmented_bar(
         &context.focus.momentum_bar,
         attention_bar_value(live_summary.as_ref()).as_ref(),
@@ -2728,6 +2952,8 @@ fn apply_summary_chrome_visibility(
     card.bars.set_visible(visibility.bars_visible);
     card.nudge_state.set_visible(visibility.nudge_state_visible);
     card.nudge_row.set_visible(visibility.nudge_row_visible);
+    card.footer
+        .set_visible(visibility.bars_visible || card.recency.is_visible());
 }
 
 fn schedule_runtime_size_sync(context: &Rc<AppContext>) {
