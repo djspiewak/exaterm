@@ -180,10 +180,8 @@ pub fn build_tactical_evidence(
         dominant_process: observation.dominant_process.clone(),
         process_tree_excerpt: observation.process_tree_excerpt.clone(),
         recent_files: observation.recent_files.clone(),
-        work_output_excerpt: observation.painted_line.clone(),
-        current_time: Some("now".into()),
-        idle_seconds: Some(observation.last_change.elapsed().as_secs()),
-        last_update_age: Some(relative_age_label(observation.last_change.elapsed())),
+        terminal_status_line: observation.painted_line.clone(),
+        terminal_status_line_age: Some(relative_age_label(observation.last_change.elapsed())),
         recent_terminal_activity: synthesis_terminal_activity(observation),
         recent_events: session
             .events
@@ -219,7 +217,7 @@ pub fn build_nudge_evidence(
         shell_child_command: observation.shell_child_command.clone(),
         idle_seconds: Some(observation.last_change.elapsed().as_secs()),
         tactical_state_brief: summary.tactical_state_brief.clone(),
-        momentum_state_brief: summary.momentum_state_brief.clone(),
+        attention_brief: summary.attention_brief.clone(),
         headline: summary.headline.clone(),
         recent_terminal_history: nudge_terminal_history(observation),
     }

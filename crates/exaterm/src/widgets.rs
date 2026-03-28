@@ -23,7 +23,6 @@ pub(crate) struct SessionCardWidgets {
     pub terminal_slot: gtk::Box,
     pub bars: gtk::Box,
     pub headline: gtk::Label,
-    pub detail: gtk::Label,
     pub alert: gtk::Label,
     pub momentum_bar: SegmentedBarWidgets,
     pub risk_bar: SegmentedBarWidgets,
@@ -69,6 +68,8 @@ pub(crate) fn build_segmented_bar(label: &str) -> SegmentedBarWidgets {
         .wrap(true)
         .css_classes(vec!["bar-reason".to_string()])
         .build();
+    reason.set_lines(3);
+    reason.set_ellipsize(gtk::pango::EllipsizeMode::End);
     let frame = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .spacing(4)

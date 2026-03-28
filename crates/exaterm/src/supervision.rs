@@ -59,7 +59,6 @@ pub struct BattleCardViewModel {
     pub status: BattleCardStatus,
     pub recency_label: String,
     pub headline: String,
-    pub primary_detail: Option<String>,
     pub evidence_fragments: Vec<String>,
     pub alignment: AlignmentSignal,
 }
@@ -74,7 +73,6 @@ pub fn build_battle_card(record: &SessionRecord, observed: &ObservedActivity) ->
         status,
         recency_label: recency_label(observed.idle_seconds, status),
         headline: String::new(),
-        primary_detail: None,
         evidence_fragments: Vec::new(),
         alignment: AlignmentSignal {
             text: String::new(),
@@ -180,7 +178,6 @@ mod tests {
     fn build_battle_card_leaves_text_fields_blank() {
         let card = build_battle_card(&session(SessionStatus::Running), &ObservedActivity::default());
         assert!(card.headline.is_empty());
-        assert!(card.primary_detail.is_none());
         assert!(card.evidence_fragments.is_empty());
         assert!(card.alignment.text.is_empty());
     }

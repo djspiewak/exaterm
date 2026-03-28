@@ -1004,7 +1004,7 @@ fn maybe_queue_nudge(
     let Some(worker) = state.nudge_worker.as_ref() else {
         return;
     };
-    if summary.tactical_state != Some(TacticalState::Stopped) {
+    if summary.tactical_state != TacticalState::Stopped {
         return;
     }
     let Some(shell_child_command) = observation.shell_child_command.as_deref() else {
@@ -1603,6 +1603,24 @@ mod tests {
     use super::*;
     use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn add_terminals_follows_staged_density_growth() {
+        assert_eq!(additions_for_session_count(1), 1);
+        assert_eq!(additions_for_session_count(2), 2);
+        assert_eq!(additions_for_session_count(4), 2);
+        assert_eq!(additions_for_session_count(6), 2);
+        assert_eq!(additions_for_session_count(8), 4);
+        assert_eq!(additions_for_session_count(12), 4);
+    }
+
+    #[test]
+    fn add_terminals_stops_outside_supported_breakpoints() {
+        assert_eq!(additions_for_session_count(3), 0);
+        assert_eq!(additions_for_session_count(5), 0);
+        assert_eq!(additions_for_session_count(10), 0);
+        assert_eq!(additions_for_session_count(16), 0);
+    }
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();

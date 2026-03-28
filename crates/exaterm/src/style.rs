@@ -245,13 +245,6 @@ pub(crate) fn load_css() {
             line-height: 1.12;
         }
 
-        .card-detail {
-            color: rgba(226, 234, 242, 0.94);
-            font-size: 15px;
-            font-weight: 650;
-            line-height: 1.25;
-        }
-
         .card-evidence {
             color: rgba(198, 212, 227, 0.88);
             font-size: 12px;
@@ -322,7 +315,7 @@ pub(crate) fn load_css() {
             border-radius: 12px;
             border: 1px solid rgba(173, 188, 204, 0.08);
             background: rgba(11, 18, 28, 0.18);
-            padding: 7px 9px;
+            padding: 9px 11px;
         }
 
         .bar-caption {
@@ -358,9 +351,10 @@ pub(crate) fn load_css() {
         }
 
         .bar-reason {
-            color: rgba(186, 200, 214, 0.56);
-            font-size: 10px;
-            line-height: 1.2;
+            color: rgba(226, 234, 242, 0.9);
+            font-size: 13px;
+            font-weight: 650;
+            line-height: 1.28;
         }
 
         .focus-title {
@@ -540,7 +534,6 @@ pub(crate) fn load_css() {
         }
 
         .focus-mode flowboxchild .card-headline,
-        .focus-mode flowboxchild .card-detail,
         .focus-mode flowboxchild .card-scrollback-band,
         .focus-mode flowboxchild .bar-widget {
         }

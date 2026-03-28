@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 pub enum TacticalState {
     Idle,
     Stopped,
-    Active,
     Thinking,
     Working,
     Blocked,
@@ -16,62 +15,28 @@ pub enum TacticalState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum MomentumState {
-    Strong,
-    Steady,
-    Fragile,
-    Stalled,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OperatorAction {
-    None,
-    Watch,
-    Nudge,
+pub enum AttentionLevel {
+    Autopilot,
+    Monitor,
+    Guide,
     Intervene,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RiskPosture {
-    Low,
-    Watch,
-    High,
-    Extreme,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MismatchLevel {
-    Low,
-    Watch,
-    High,
+    Takeover,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TacticalSynthesis {
-    pub tactical_state: Option<TacticalState>,
+    pub tactical_state: TacticalState,
     pub tactical_state_brief: Option<String>,
-    pub momentum_state: Option<MomentumState>,
-    pub momentum_state_brief: Option<String>,
-    pub operator_action: Option<OperatorAction>,
-    pub operator_action_brief: Option<String>,
+    pub attention_level: AttentionLevel,
+    pub attention_brief: Option<String>,
     pub headline: Option<String>,
-    pub risk_posture: Option<RiskPosture>,
-    pub risk_brief: Option<String>,
-    pub mismatch_level: MismatchLevel,
-    pub mismatch_brief: Option<String>,
 }
 
 impl TacticalSynthesis {
     pub fn sanitize(mut self) -> Self {
         self.headline = sanitize_optional(self.headline);
         self.tactical_state_brief = sanitize_optional(self.tactical_state_brief);
-        self.momentum_state_brief = sanitize_optional(self.momentum_state_brief);
-        self.operator_action_brief = sanitize_optional(self.operator_action_brief);
-        self.risk_brief = sanitize_optional(self.risk_brief);
-        self.mismatch_brief = sanitize_optional(self.mismatch_brief);
+        self.attention_brief = sanitize_optional(self.attention_brief);
         self
     }
 }
@@ -137,27 +102,22 @@ fn sanitize_name(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MismatchLevel, NameSuggestion, NudgeSuggestion, TacticalSynthesis};
+    use super::{AttentionLevel, NameSuggestion, NudgeSuggestion, TacticalState, TacticalSynthesis};
 
     #[test]
     fn tactical_synthesis_sanitize_trims_fields() {
         let summary = TacticalSynthesis {
-            tactical_state: None,
+            tactical_state: TacticalState::Stopped,
             tactical_state_brief: Some("  stopped   cleanly  ".into()),
-            momentum_state: None,
-            momentum_state_brief: None,
-            operator_action: None,
-            operator_action_brief: None,
+            attention_level: AttentionLevel::Guide,
+            attention_brief: Some("  likely needs   a small nudge  ".into()),
             headline: Some("  parser   pass ".into()),
-            risk_posture: None,
-            risk_brief: None,
-            mismatch_level: MismatchLevel::Low,
-            mismatch_brief: None,
         }
         .sanitize();
 
         assert_eq!(summary.headline.as_deref(), Some("parser pass"));
         assert_eq!(summary.tactical_state_brief.as_deref(), Some("stopped cleanly"));
+        assert_eq!(summary.attention_brief.as_deref(), Some("likely needs a small nudge"));
     }
 
     #[test]

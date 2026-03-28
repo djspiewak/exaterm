@@ -34,8 +34,7 @@ use exaterm_core::synthesis::{
 use exaterm_types::model::{SessionId, SessionLaunch, SessionRecord};
 use exaterm_types::proto::{ClientMessage, ObservationSnapshot, ServerMessage, WorkspaceSnapshot};
 use exaterm_types::synthesis::{
-    MismatchLevel, MomentumState, NameSuggestion, NudgeSuggestion, OperatorAction, RiskPosture,
-    TacticalState, TacticalSynthesis,
+    AttentionLevel, NameSuggestion, NudgeSuggestion, TacticalState, TacticalSynthesis,
 };
 use gtk::gdk;
 use gtk::prelude::*;
@@ -411,8 +410,8 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
         .vexpand(true)
         .build();
     focus_terminal_slot.add_css_class("card-terminal-slot");
-    let focus_momentum_bar = build_segmented_bar("Momentum");
-    let focus_risk_bar = build_segmented_bar("Risk");
+    let focus_momentum_bar = build_segmented_bar("Attention Condition");
+    let focus_risk_bar = build_segmented_bar("Unused");
 
     let focus_header_left = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -979,12 +978,6 @@ fn build_battle_card_widgets(
         .visible(false)
         .css_classes(vec!["card-headline".to_string()])
         .build();
-    let detail = gtk::Label::builder()
-        .xalign(0.0)
-        .wrap(true)
-        .visible(false)
-        .css_classes(vec!["card-detail".to_string()])
-        .build();
     let alert = gtk::Label::builder()
         .xalign(0.0)
         .wrap(true)
@@ -995,8 +988,8 @@ fn build_battle_card_widgets(
     alert.set_single_line_mode(true);
     alert.set_ellipsize(gtk::pango::EllipsizeMode::End);
     nudge_row.prepend(&alert);
-    let momentum_bar = build_segmented_bar("Momentum");
-    let risk_bar = build_segmented_bar("Risk");
+    let momentum_bar = build_segmented_bar("Attention Condition");
+    let risk_bar = build_segmented_bar("Unused");
 
     let header_left = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -1081,7 +1074,6 @@ fn build_battle_card_widgets(
         .build();
     content.append(&header);
     content.append(&headline);
-    content.append(&detail);
     content.append(&nudge_row);
     content.append(&middle_stack);
     content.append(&footer);
@@ -1200,7 +1192,6 @@ fn build_battle_card_widgets(
         terminal_slot,
         bars,
         headline,
-        detail,
         alert,
         momentum_bar,
         risk_bar,
@@ -2076,9 +2067,6 @@ fn update_battle_card_widgets(
     card.recency.set_label("");
     card.recency.set_visible(false);
     card.headline.set_label(&card_model.headline);
-    card.detail
-        .set_label(card_model.primary_detail.as_deref().unwrap_or(""));
-    card.detail.set_visible(card_model.primary_detail.is_some());
 
     let scrollback = scrollback_fragments(
         observation,
@@ -2164,7 +2152,7 @@ fn maybe_queue_nudge(
     let Some(summary) = summary else {
         return;
     };
-    if summary.tactical_state != Some(TacticalState::Stopped) {
+    if summary.tactical_state != TacticalState::Stopped {
         return;
     }
     let Some(shell_child_command) = observation.shell_child_command.as_deref() else {
@@ -2329,82 +2317,46 @@ fn gallery_mock_summary(context: &Rc<AppContext>, session_id: SessionId) -> Opti
     let name = session.launch.name.as_str();
     Some(match name {
         "Agent A" => TacticalSynthesis {
-            tactical_state: Some(TacticalState::Working),
+            tactical_state: TacticalState::Working,
             tactical_state_brief: Some("Narrowing the parser failure with focused reruns".into()),
-            momentum_state: Some(MomentumState::Steady),
-            momentum_state_brief: Some("The loop keeps moving, but the fix is not landed yet".into()),
-            operator_action: Some(OperatorAction::Watch),
-            operator_action_brief: Some("Let the focused repair loop continue".into()),
+            attention_level: AttentionLevel::Monitor,
+            attention_brief: Some("The loop is healthy and converging, but it is still worth watching.".into()),
             headline: Some("Tight edit-test loop, still failing but converging.".into()),
-            risk_posture: Some(RiskPosture::Low),
-            risk_brief: Some("Normal repair work with no risky behavior visible".into()),
-            mismatch_level: MismatchLevel::Low,
-            mismatch_brief: Some("Narrative and machine evidence line up".into()),
         },
         "Agent B" => TacticalSynthesis {
-            tactical_state: Some(TacticalState::Stopped),
+            tactical_state: TacticalState::Stopped,
             tactical_state_brief: Some("Paused after a clean checkpoint".into()),
-            momentum_state: Some(MomentumState::Strong),
-            momentum_state_brief: Some("The checkpoint landed cleanly before the pause".into()),
-            operator_action: Some(OperatorAction::Nudge),
-            operator_action_brief: Some("A continue prompt is probably enough".into()),
+            attention_level: AttentionLevel::Guide,
+            attention_brief: Some("A simple continue prompt is probably enough to restart useful work.".into()),
             headline: Some("Looks done with this pass and waiting for a nudge.".into()),
-            risk_posture: Some(RiskPosture::Low),
-            risk_brief: Some("No risky behavior visible; this looks like a clean pause".into()),
-            mismatch_level: MismatchLevel::Low,
-            mismatch_brief: Some("The pause matches the visible checkpoint".into()),
         },
         "Agent C" => TacticalSynthesis {
-            tactical_state: Some(TacticalState::Blocked),
+            tactical_state: TacticalState::Blocked,
             tactical_state_brief: Some("Waiting on explicit approval".into()),
-            momentum_state: Some(MomentumState::Fragile),
-            momentum_state_brief: Some("Forward motion stops at the approval boundary".into()),
-            operator_action: Some(OperatorAction::Intervene),
-            operator_action_brief: Some("Approval or redirection is required now".into()),
+            attention_level: AttentionLevel::Intervene,
+            attention_brief: Some("The next step is blocked on real operator approval.".into()),
             headline: Some("Hard stop on approval boundary; operator input required.".into()),
-            risk_posture: Some(RiskPosture::Watch),
-            risk_brief: Some("The next step touches production, so operator review matters".into()),
-            mismatch_level: MismatchLevel::Low,
-            mismatch_brief: Some("The stop is consistent with the stated boundary".into()),
         },
         "Agent D" => TacticalSynthesis {
-            tactical_state: Some(TacticalState::Active),
+            tactical_state: TacticalState::Working,
             tactical_state_brief: Some("Retrying the same failing path".into()),
-            momentum_state: Some(MomentumState::Stalled),
-            momentum_state_brief: Some("Retries keep looping without narrowing the issue".into()),
-            operator_action: Some(OperatorAction::Watch),
-            operator_action_brief: Some("Watch closely; step in if the loop repeats again".into()),
+            attention_level: AttentionLevel::Guide,
+            attention_brief: Some("The loop is repeating without a decisive new clue and may need redirection soon.".into()),
             headline: Some("Retry loop is repeating without a decisive new clue.".into()),
-            risk_posture: Some(RiskPosture::Watch),
-            risk_brief: Some("Churn risk is rising because the same failure keeps returning".into()),
-            mismatch_level: MismatchLevel::Watch,
-            mismatch_brief: Some("The narrative sounds active, but progress is weak".into()),
         },
         "Agent E" => TacticalSynthesis {
-            tactical_state: Some(TacticalState::Idle),
+            tactical_state: TacticalState::Idle,
             tactical_state_brief: Some("Stable after validation with nothing to resume".into()),
-            momentum_state: Some(MomentumState::Steady),
-            momentum_state_brief: Some("Recent momentum is fading after a clean finish".into()),
-            operator_action: Some(OperatorAction::None),
-            operator_action_brief: Some("No intervention needed unless priorities change".into()),
+            attention_level: AttentionLevel::Autopilot,
+            attention_brief: Some("This looks stably parked with no meaningful next step pending.".into()),
             headline: Some("Looks stably parked after validation, not suspiciously idle.".into()),
-            risk_posture: Some(RiskPosture::Low),
-            risk_brief: Some("No risky behavior or mismatch is visible".into()),
-            mismatch_level: MismatchLevel::Low,
-            mismatch_brief: Some("The transcript supports a clean stand-by state".into()),
         },
         "Agent F" => TacticalSynthesis {
-            tactical_state: Some(TacticalState::Active),
+            tactical_state: TacticalState::Working,
             tactical_state_brief: Some("Escalating from disk pressure into risky cleanup ideas".into()),
-            momentum_state: Some(MomentumState::Stalled),
-            momentum_state_brief: Some("Disk pressure is halting forward motion".into()),
-            operator_action: Some(OperatorAction::Intervene),
-            operator_action_brief: Some("Step in before cleanup turns destructive".into()),
+            attention_level: AttentionLevel::Takeover,
+            attention_brief: Some("Risky cleanup ideas and frustration mean the operator should take direct control.".into()),
             headline: Some("Blocked on disk space and drifting toward risky cleanup actions.".into()),
-            risk_posture: Some(RiskPosture::Extreme),
-            risk_brief: Some("Frustration plus destructive cleanup ideas is an extreme-risk combination".into()),
-            mismatch_level: MismatchLevel::Watch,
-            mismatch_brief: Some("The transcript still matches the disk-pressure problem, but escalation is concerning".into()),
         },
         _ => return None,
     })
@@ -2414,74 +2366,40 @@ fn apply_tactical_synthesis(
     mut card_model: BattleCardViewModel,
     summary: TacticalSynthesis,
 ) -> BattleCardViewModel {
-    if let Some(tactical_state) = summary.tactical_state {
-        card_model.status = match tactical_state {
-            TacticalState::Idle => BattleCardStatus::Idle,
-            TacticalState::Stopped => BattleCardStatus::Stopped,
-            TacticalState::Active => BattleCardStatus::Active,
-            TacticalState::Thinking => BattleCardStatus::Thinking,
-            TacticalState::Working => BattleCardStatus::Working,
-            TacticalState::Blocked => BattleCardStatus::Blocked,
-            TacticalState::Failed => BattleCardStatus::Failed,
-            TacticalState::Complete => BattleCardStatus::Complete,
-            TacticalState::Detached => BattleCardStatus::Detached,
-        };
-        card_model.recency_label = match card_model.status {
-            BattleCardStatus::Idle | BattleCardStatus::Stopped => card_model.recency_label,
-            _ if card_model.recency_label.starts_with("idle ") => "active now".into(),
-            _ => card_model.recency_label,
-        };
-    }
+    card_model.status = match summary.tactical_state {
+        TacticalState::Idle => BattleCardStatus::Idle,
+        TacticalState::Stopped => BattleCardStatus::Stopped,
+        TacticalState::Thinking => BattleCardStatus::Thinking,
+        TacticalState::Working => BattleCardStatus::Working,
+        TacticalState::Blocked => BattleCardStatus::Blocked,
+        TacticalState::Failed => BattleCardStatus::Failed,
+        TacticalState::Complete => BattleCardStatus::Complete,
+        TacticalState::Detached => BattleCardStatus::Detached,
+    };
+    card_model.recency_label = match card_model.status {
+        BattleCardStatus::Idle | BattleCardStatus::Stopped => card_model.recency_label,
+        _ if card_model.recency_label.starts_with("idle ") => "active now".into(),
+        _ => card_model.recency_label,
+    };
 
     if let Some(headline) = summary.headline.clone() {
         card_model.headline = headline;
     }
-    let caution_text = match summary.operator_action {
-        Some(OperatorAction::Intervene) => {
-            summary.operator_action_brief.clone()
-        }
-        Some(OperatorAction::Nudge) => summary.operator_action_brief.clone(),
-        _ if matches!(
-            summary.risk_posture,
-            Some(RiskPosture::Watch)
-                | Some(RiskPosture::High)
-                | Some(RiskPosture::Extreme)
-        ) =>
-        {
-            summary.risk_brief.clone()
-        }
-        _ if !matches!(summary.mismatch_level, MismatchLevel::Low) => summary.mismatch_brief.clone(),
-        _ => None,
-    };
-
-    if let Some(text) = caution_text {
+    if let Some(text) = summary.attention_brief.clone() {
         card_model.alignment.text = text;
         card_model.alignment.tone = if matches!(
-            summary.risk_posture,
-            Some(RiskPosture::High)
-                | Some(RiskPosture::Extreme)
-        ) || matches!(
-            summary.operator_action,
-            Some(OperatorAction::Intervene)
-        )
-            || matches!(summary.mismatch_level, MismatchLevel::High)
-        {
+            summary.attention_level,
+            AttentionLevel::Intervene | AttentionLevel::Takeover
+        ) {
             SignalTone::Alert
         } else if matches!(
-            summary.risk_posture,
-            Some(RiskPosture::Watch)
-        ) || matches!(
-            summary.operator_action,
-            Some(OperatorAction::Nudge)
-        )
-            || matches!(summary.mismatch_level, MismatchLevel::Watch)
-        {
+            summary.attention_level,
+            AttentionLevel::Monitor | AttentionLevel::Guide
+        ) {
             SignalTone::Watch
         } else {
             SignalTone::Calm
         };
-    } else if matches!(summary.mismatch_level, MismatchLevel::High) {
-        card_model.alignment.tone = SignalTone::Alert;
     }
 
     card_model
@@ -2490,13 +2408,11 @@ fn apply_tactical_synthesis(
 fn apply_metric_widgets(
     card: &SessionCardWidgets,
     summary: Option<&TacticalSynthesis>,
-    idle_seconds: Option<u64>,
+    _idle_seconds: Option<u64>,
 ) {
-    let momentum = momentum_bar_value(summary, idle_seconds);
-    apply_segmented_bar(&card.momentum_bar, momentum.as_ref(), summary.is_some());
-
-    let risk = risk_bar_value(summary);
-    apply_segmented_bar(&card.risk_bar, risk.as_ref(), summary.is_some());
+    let attention = attention_bar_value(summary);
+    apply_segmented_bar(&card.momentum_bar, attention.as_ref(), summary.is_some());
+    apply_segmented_bar(&card.risk_bar, None, false);
 }
 
 fn apply_segmented_bar(
@@ -2539,55 +2455,16 @@ fn apply_segmented_bar(
     }
 }
 
-fn momentum_bar_value(
-    summary: Option<&TacticalSynthesis>,
-    idle_seconds: Option<u64>,
-) -> Option<(usize, SignalTone, Option<String>)> {
+fn attention_bar_value(summary: Option<&TacticalSynthesis>) -> Option<(usize, SignalTone, Option<String>)> {
     if let Some(summary) = summary {
-        let (base_fill, tone) = match summary.momentum_state {
-            Some(MomentumState::Strong) => (4usize, SignalTone::Calm),
-            Some(MomentumState::Steady) => (3usize, SignalTone::Calm),
-            Some(MomentumState::Fragile) => (2usize, SignalTone::Watch),
-            Some(MomentumState::Stalled) => (1usize, SignalTone::Alert),
-            None => return None,
-        };
-        let fill = decayed_momentum_fill(base_fill, summary, idle_seconds);
-        return Some((fill, tone, summary.momentum_state_brief.clone()));
-    }
-    None
-}
-
-fn decayed_momentum_fill(
-    base_fill: usize,
-    summary: &TacticalSynthesis,
-    idle_seconds: Option<u64>,
-) -> usize {
-    let mut fill = base_fill;
-    let should_decay = matches!(
-        summary.tactical_state,
-        Some(TacticalState::Stopped | TacticalState::Blocked)
-    ) || matches!(summary.momentum_state, Some(MomentumState::Stalled));
-
-    if should_decay {
-        let seconds = idle_seconds.unwrap_or_default();
-        let decay_steps = (seconds / 30) as usize;
-        fill = fill.saturating_sub(decay_steps);
-    }
-
-    fill.min(4)
-}
-
-fn risk_bar_value(summary: Option<&TacticalSynthesis>) -> Option<(usize, SignalTone, Option<String>)> {
-    if let Some(summary) = summary {
-        if let Some(risk) = summary.risk_posture {
-            let hint = summary.risk_brief.clone();
-            return Some(match risk {
-                RiskPosture::Low => (1, SignalTone::Calm, hint),
-                RiskPosture::Watch => (2, SignalTone::Watch, hint),
-                RiskPosture::High => (3, SignalTone::Alert, hint),
-                RiskPosture::Extreme => (4, SignalTone::Alert, hint),
-            });
-        }
+        let hint = summary.attention_brief.clone();
+        return Some(match summary.attention_level {
+            AttentionLevel::Autopilot => (1, SignalTone::Calm, hint),
+            AttentionLevel::Monitor => (2, SignalTone::Watch, hint),
+            AttentionLevel::Guide => (3, SignalTone::Watch, hint),
+            AttentionLevel::Intervene => (4, SignalTone::Alert, hint),
+            AttentionLevel::Takeover => (4, SignalTone::Alert, hint),
+        });
     }
     None
 }
@@ -2650,7 +2527,6 @@ fn refresh_card_styles(context: &Rc<AppContext>) {
             !card.alert.label().is_empty(),
         );
         card.headline.set_visible(chrome_visibility.headline_visible);
-        card.detail.set_visible(!focus_mode && !card.detail.label().is_empty());
         card.alert.set_wrap(focus_mode);
         card.alert.set_single_line_mode(!focus_mode);
         card.alert.set_ellipsize(if focus_mode {
@@ -2782,15 +2658,10 @@ fn refresh_focus_panel(context: &Rc<AppContext>) {
     context.focus.bars.set_visible(chrome_mode.summarized());
     apply_segmented_bar(
         &context.focus.momentum_bar,
-        momentum_bar_value(live_summary.as_ref(), Some(observation.last_change.elapsed().as_secs()))
-            .as_ref(),
+        attention_bar_value(live_summary.as_ref()).as_ref(),
         live_summary.is_some(),
     );
-    apply_segmented_bar(
-        &context.focus.risk_bar,
-        risk_bar_value(live_summary.as_ref()).as_ref(),
-        live_summary.is_some(),
-    );
+    apply_segmented_bar(&context.focus.risk_bar, None, false);
 }
 
 fn update_flowbox_columns(context: &Rc<AppContext>) {
