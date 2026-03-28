@@ -7,7 +7,7 @@ Instead of replacing the terminal, it lets you keep several agent sessions visib
 The current build is Linux-first and still moving quickly, but the core shape is in place:
 - real terminal sessions, not fake transcript widgets
 - a battlefield view that scales from one terminal upward
-- lightweight summaries and status signals for each session
+- lightweight LLM-backed headlines and status signals for each session
 - a persistent beachhead daemon behind the UI so sessions can outlive the window
 
 ## What It Feels Like
@@ -15,7 +15,7 @@ The current build is Linux-first and still moving quickly, but the core shape is
 At low density, Exaterm behaves like a normal terminal app.
 
 As you add more sessions, it progressively compresses into supervision cards:
-- short brief
+- short headline
 - recent terminal evidence
 - momentum and risk
 - state like `working`, `stopped`, `blocked`, or `failed`
@@ -24,22 +24,28 @@ The goal is simple: make it possible to supervise multiple coding agents without
 
 ## Architecture
 
-Exaterm is split into three crates:
+Exaterm is split into four crates:
 
+- `crates/exaterm-types`
+  - shared contract types only
+  - model records/enums, protocol messages, synthesis result types
 - `crates/exaterm-core`
-  - shared core logic
-  - model, protocol, observation, supervision, synthesis, daemon runtime
+  - headless daemon-side logic
+  - observation, synthesis, daemon runtime, process/file inspection, protocol handling
 - `crates/exatermd`
   - the headless beachhead daemon
   - owns PTYs, session state, summaries, and nudging
 - `crates/exaterm`
   - the GTK/VTE desktop client
-  - renders the UI and talks to the daemon
+  - renders the UI, owns local display PTYs, and talks to the daemon
 
 The UI is intended to always be beachhead-backed in normal operation.
 
-Locally, the client talks to the beachhead over Unix domain sockets.
-The long-term remote model is the same protocol over SSH-forwarded Unix sockets.
+Locally, the client talks to the beachhead over Unix domain sockets:
+- one control socket for snapshots, commands, lifecycle, and model state
+- one raw PTY byte socket per live session
+
+The remote path uses the same beachhead protocol over SSH-forwarded Unix sockets.
 
 ## Current Status
 
@@ -51,6 +57,7 @@ What works well right now:
 - terminal-native VTE rendering
 - battlefield/focus layouts for supervising multiple sessions
 - LLM-backed summaries, naming, and auto-nudge behavior
+- remote beachhead sessions over SSH in an experimental but working form
 
 What is still evolving:
 - remote beachhead bootstrap and packaging
@@ -70,13 +77,28 @@ The exact package names depend on distro.
 
 Exaterm also uses the OpenAI API for summaries, naming, and nudges.
 
-Environment variables:
+Required:
 - `OPENAI_API_KEY`
-- optional: `EXATERM_OPENAI_BASE_URL`
-- optional: `OPENAI_BASE_URL`
-- optional: `EXATERM_SUMMARY_MODEL`
-- optional: `EXATERM_NAMING_MODEL`
-- optional: `EXATERM_NUDGE_MODEL`
+
+Optional overrides:
+- `EXATERM_OPENAI_BASE_URL`
+  - preferred base URL override for an OpenAI-compatible API endpoint
+- `OPENAI_BASE_URL`
+  - fallback base URL override if `EXATERM_OPENAI_BASE_URL` is not set
+- `EXATERM_SUMMARY_MODEL`
+  - model override for session summaries
+- `EXATERM_NAMING_MODEL`
+  - model override for session naming
+- `EXATERM_NUDGE_MODEL`
+  - model override for auto-nudges
+
+Notes:
+- `OPENAI_*` is used for the API key and compatible base URL
+- model overrides are Exaterm-specific: `EXATERM_SUMMARY_MODEL`, `EXATERM_NAMING_MODEL`, and `EXATERM_NUDGE_MODEL`
+- if neither base URL variable is set, Exaterm uses `https://api.openai.com/v1`
+- Exaterm appends `/chat/completions` automatically when needed
+- these variables can also be provided in a repo-local `.env` file
+- without `OPENAI_API_KEY`, the app still runs, but summaries, naming, and nudges stay disabled
 
 ## Building
 
@@ -99,6 +121,7 @@ make run
 ```
 
 That launches the GTK app and connects to a local beachhead, spawning one if needed.
+It also builds both `exaterm` and `exatermd` first.
 
 You can also run the daemon directly:
 
@@ -129,15 +152,13 @@ Useful commands:
 ```bash
 make
 make run
+make daemon
 make check
 make test
 make test-workspace
 make core-test
 make daemon-check
-make probe
 ```
-
-The raw-path latency probe lives in the core crate and is useful when working on beachhead transport performance.
 
 ## Why “Exaterm”?
 

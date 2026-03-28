@@ -96,7 +96,7 @@ The model layer may refine and classify:
 - idle vs stopped vs blocked vs complete
 - momentum
 - risk posture
-- terse operator summary
+- one short operator-facing headline
 - auto-nudge text
 
 The model must not be used as an excuse to skip building good observability.
@@ -135,7 +135,7 @@ Avoid:
 Preferred card hierarchy:
 - identity
 - state
-- one terse operator-facing summary
+- one short operator-facing headline
 - a few concrete evidence lines
 - stable metric locations
 
@@ -170,15 +170,20 @@ Rules:
 
 ## Architecture Guidance
 
-The current intended architecture is a three-part workspace:
+The current intended architecture is a four-part workspace:
+- `crates/exaterm-types`
+  - pure shared contract types
+  - model records/enums
+  - protocol payloads
+  - synthesis result types
 - `crates/exaterm-core`
-  - pure shared core
-  - model
+  - headless daemon-side logic
+  - launch/model helpers
   - headless runtime and PTY ownership
   - observation
-  - supervision
   - synthesis
-  - protocol
+  - file/process inspection
+  - daemon protocol handling
 - `crates/exatermd`
   - pure daemon binary
   - no GTK
@@ -187,6 +192,7 @@ The current intended architecture is a three-part workspace:
 - `crates/exaterm`
   - GTK/VTE client
   - layout, interaction, local display PTYs, and rendering
+  - frontend-only supervision and presentation logic
 
 ### Beachhead Rules
 
@@ -223,6 +229,8 @@ For remote transport, the intended direction is:
 In particular:
 - do not let `crates/exaterm/src/ui.rs` absorb more headless runtime logic
 - do not let GTK or VTE leak back into `exaterm-core`
+- do not let behavior-heavy helpers or execution policy creep into `exaterm-types`
+- keep frontend prose/presentation shaping out of the daemon and shared contract crates
 - prefer testable helpers in core modules instead of burying logic in GTK callbacks
 - keep `exatermd` pure enough to ship independently to remote Linux hosts
 
