@@ -1,11 +1,19 @@
+#[cfg(target_os = "linux")]
 mod actions;
+#[cfg(target_os = "linux")]
 mod beachhead;
+#[cfg(target_os = "linux")]
 mod remote;
+#[cfg(target_os = "linux")]
 mod style;
+#[cfg(target_os = "linux")]
 mod terminal_adapter;
+#[cfg(target_os = "linux")]
 mod ui;
+#[cfg(target_os = "linux")]
 mod widgets;
 
+#[cfg(target_os = "linux")]
 fn main() -> glib::ExitCode {
     if std::env::args().nth(1).as_deref() == Some("--beachhead-daemon") {
         return if exaterm_core::run_local_daemon() == std::process::ExitCode::SUCCESS {
@@ -15,4 +23,9 @@ fn main() -> glib::ExitCode {
         };
     }
     ui::run()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    eprintln!("exaterm-gtk is only supported on Linux");
 }

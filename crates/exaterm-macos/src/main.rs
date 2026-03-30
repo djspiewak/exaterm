@@ -1,22 +1,39 @@
+#[cfg(target_os = "macos")]
 mod app_delegate;
+#[cfg(target_os = "macos")]
 mod app_state;
+#[cfg(target_os = "macos")]
 mod battlefield_view;
+#[cfg(target_os = "macos")]
 mod focus_view;
+#[cfg(target_os = "macos")]
 mod key_map;
+#[cfg(target_os = "macos")]
 mod menu;
+#[cfg(target_os = "macos")]
 mod session_io;
+#[cfg(target_os = "macos")]
 mod style;
+#[cfg(target_os = "macos")]
 mod terminal_view;
+#[cfg(target_os = "macos")]
 mod window;
 
+#[cfg(target_os = "macos")]
 use std::cell::RefCell;
+#[cfg(target_os = "macos")]
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(target_os = "macos")]
 use std::rc::Rc;
+#[cfg(target_os = "macos")]
 use std::sync::Arc;
+#[cfg(target_os = "macos")]
 use std::sync::atomic::AtomicBool;
 
+#[cfg(target_os = "macos")]
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 
+#[cfg(target_os = "macos")]
 fn main() {
     let argv = std::env::args().collect::<Vec<_>>();
     if argv.get(1).map(|s| s.as_str()) == Some("--beachhead-daemon") {
@@ -38,6 +55,12 @@ fn main() {
     run_app(mode);
 }
 
+#[cfg(not(target_os = "macos"))]
+fn main() {
+    eprintln!("exaterm-macos is only supported on macOS");
+}
+
+#[cfg(target_os = "macos")]
 fn run_app(mode: exaterm_ui::beachhead::RunMode) {
     use objc2::msg_send;
     use objc2::rc::Retained;
@@ -452,11 +475,13 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
     app.run();
 }
 
+#[cfg(target_os = "macos")]
 struct TerminalSurface {
     bridge: Rc<exaterm_swiftterm::TerminalBridge>,
     view: objc2::rc::Retained<objc2_app_kit::NSView>,
 }
 
+#[cfg(target_os = "macos")]
 fn terminal_appearance() -> exaterm_swiftterm::TerminalAppearance {
     let terminal_font = exaterm_ui::theme::terminal_font();
     exaterm_swiftterm::TerminalAppearance {
@@ -468,6 +493,7 @@ fn terminal_appearance() -> exaterm_swiftterm::TerminalAppearance {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn ensure_terminal_surfaces(
     surfaces: &mut BTreeMap<exaterm_types::model::SessionId, TerminalSurface>,
     sessions: &[exaterm_types::model::SessionRecord],
@@ -512,6 +538,7 @@ fn ensure_terminal_surfaces(
     }
 }
 
+#[cfg(target_os = "macos")]
 fn layout_views(
     content_view: &objc2_app_kit::NSView,
     battlefield_view: &battlefield_view::BattlefieldView,
@@ -541,6 +568,7 @@ fn layout_views(
     }
 }
 
+#[cfg(target_os = "macos")]
 fn apply_terminal_layout(
     surfaces: &BTreeMap<exaterm_types::model::SessionId, TerminalSurface>,
     battlefield_view: &battlefield_view::BattlefieldView,
@@ -586,6 +614,7 @@ fn apply_terminal_layout(
     }
 }
 
+#[cfg(target_os = "macos")]
 fn present_startup_error(mtm: objc2::MainThreadMarker, error: &str) {
     use objc2_app_kit::{NSAlert, NSAlertStyle};
     use objc2_foundation::NSString;
@@ -599,6 +628,7 @@ fn present_startup_error(mtm: objc2::MainThreadMarker, error: &str) {
     alert.runModal();
 }
 
+#[cfg(target_os = "macos")]
 fn present_openai_key_warning(mtm: objc2::MainThreadMarker, _window: &objc2_app_kit::NSWindow) {
     use objc2_app_kit::{NSAlert, NSAlertStyle};
     use objc2_foundation::NSString;
