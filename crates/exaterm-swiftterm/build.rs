@@ -4,9 +4,25 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=swift/Sources/ExatermTerminalBridge/Bridge.swift");
+    println!("cargo:rerun-if-changed=vendor/SwiftTerm/Sources/SwiftTerm");
+
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        return;
+    }
+
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let swift_src = manifest_dir.join("swift/Sources/ExatermTerminalBridge/Bridge.swift");
     let swiftterm_src = manifest_dir.join("vendor/SwiftTerm/Sources/SwiftTerm");
+
+    if !swiftterm_src.is_dir() {
+        panic!(
+            "SwiftTerm sources are required on macOS but missing at {}. Initialize the SwiftTerm submodule before building.",
+            swiftterm_src.display()
+        );
+    }
+
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let lib_file = out_dir.join("libExatermTerminalBridge.a");
     let objc_header = out_dir.join("Bridge-Swift.h");
@@ -126,9 +142,6 @@ fn main() {
     println!("cargo:rustc-link-lib=framework=SwiftUI");
     println!("cargo:rustc-link-lib=framework=UniformTypeIdentifiers");
 
-    // Rerun if the Swift source changes.
-    println!("cargo:rerun-if-changed=swift/Sources/ExatermTerminalBridge/Bridge.swift");
-    println!("cargo:rerun-if-changed=vendor/SwiftTerm/Sources/SwiftTerm");
 }
 
 fn collect_swift_sources(dir: &PathBuf, output: &mut Vec<PathBuf>) {

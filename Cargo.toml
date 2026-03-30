@@ -8,5 +8,13 @@ members = [
     "crates/exaterm-swiftterm",
     "crates/exatermd",
 ]
-default-members = ["crates/exaterm-gtk"]
+default-members = [
+    "crates/exaterm-types",
+    "crates/exaterm-core",
+    "crates/exaterm-ui",
+    "crates/exaterm-gtk",
+    "crates/exaterm-macos",
+    "crates/exaterm-swiftterm",
+    "crates/exatermd",
+]
 resolver = "2"
