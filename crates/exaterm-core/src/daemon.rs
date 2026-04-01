@@ -1770,7 +1770,20 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock should be after epoch")
             .as_nanos();
-        std::env::temp_dir().join(format!("exaterm-test-{label}-{nanos}"))
+        let suffix = format!("exaterm-test-{label}-{nanos}");
+        // Unix socket paths have a strict length limit (104 bytes on macOS).
+        // The socket lives at <dir>/exaterm/beachhead-control.sock (+31 chars).
+        // On macOS CI, TMPDIR expands to a long /var/folders/… path that pushes
+        // us over; in that case fall back to /tmp which is always short.
+        const SOCKET_SUFFIX_LEN: usize = "/exaterm/beachhead-control.sock".len();
+        const LIMIT: usize = 104;
+        let base = std::env::temp_dir();
+        let candidate = base.join(&suffix);
+        if candidate.as_os_str().len() + SOCKET_SUFFIX_LEN > LIMIT {
+            PathBuf::from("/tmp").join(suffix)
+        } else {
+            candidate
+        }
     }
 
     fn read_server_message(reader: &mut BufReader<UnixStream>) -> ServerMessage {
