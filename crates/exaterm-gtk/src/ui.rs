@@ -19,9 +19,9 @@ use exaterm_core::observation::{
 };
 use exaterm_core::runtime::{RuntimeEvent, SessionRuntime};
 use exaterm_core::synthesis::{
-    NamingEvidence, ProviderPreferences, SynthesisBackendRegistry, TacticalEvidence,
-    name_signature, should_skip_repeated_paused_summary, summary_signature,
-    summary_substantive_signature,
+    NamingEvidence, ProviderCallResult, ProviderPreferences, SynthesisBackendRegistry,
+    SynthesisProvider, TacticalEvidence, name_signature, should_skip_repeated_paused_summary,
+    summary_signature, summary_substantive_signature,
 };
 use exaterm_types::model::{SessionId, SessionLaunch, SessionRecord};
 use exaterm_types::proto::{ClientMessage, ObservationSnapshot, ServerMessage, WorkspaceSnapshot};
@@ -65,6 +65,7 @@ const TERMINATOR_AMBIENCE_PALETTE: [&str; 16] = [
     "#2e3436", "#cc0000", "#4e9a06", "#c4a000", "#3465a4", "#75507b", "#06989a", "#d3d7cf",
     "#555753", "#ef2929", "#8ae234", "#fce94f", "#729fcf", "#ad7fa8", "#34e2e2", "#eeeeec",
 ];
+const PROVIDER_DEMOTION_COOLDOWN: Duration = Duration::from_secs(300);
 
 struct SummaryWorker {
     requests: mpsc::Sender<SummaryJob>,
@@ -80,12 +81,13 @@ struct NamingJob {
     session_id: SessionId,
     signature: String,
     evidence: NamingEvidence,
+    preferences: ProviderPreferences,
 }
 
 struct NamingResult {
     session_id: SessionId,
     signature: String,
-    suggestion: Result<NameSuggestion, String>,
+    suggestion: ProviderCallResult<NameSuggestion>,
 }
 
 struct SummaryJob {
@@ -93,13 +95,14 @@ struct SummaryJob {
     signature: String,
     substantive_signature: String,
     evidence: TacticalEvidence,
+    preferences: ProviderPreferences,
 }
 
 struct SummaryResult {
     session_id: SessionId,
     signature: String,
     substantive_signature: String,
-    summary: Result<TacticalSynthesis, String>,
+    summary: ProviderCallResult<TacticalSynthesis>,
 }
 
 struct SummaryCacheEntry {
@@ -111,6 +114,7 @@ struct SummaryCacheEntry {
     last_error: Option<String>,
     last_attempt: Option<Instant>,
     in_flight: bool,
+    skipped_providers: BTreeMap<SynthesisProvider, Instant>,
 }
 
 struct NamingCacheEntry {
@@ -120,6 +124,7 @@ struct NamingCacheEntry {
     last_error: Option<String>,
     last_attempt: Option<Instant>,
     in_flight: bool,
+    skipped_providers: BTreeMap<SynthesisProvider, Instant>,
 }
 
 pub(crate) struct NudgeCacheEntry {
@@ -139,6 +144,7 @@ impl SummaryCacheEntry {
             last_error: None,
             last_attempt: None,
             in_flight: false,
+            skipped_providers: BTreeMap::new(),
         }
     }
 }
@@ -165,6 +171,7 @@ impl NamingCacheEntry {
             last_error: None,
             last_attempt: None,
             in_flight: false,
+            skipped_providers: BTreeMap::new(),
         }
     }
 }
@@ -1626,13 +1633,12 @@ fn spawn_summary_worker() -> Option<SummaryWorker> {
 
     thread::spawn(move || {
         while let Ok(job) = request_rx.recv() {
-            let summary =
-                registry.summarize_blocking(&ProviderPreferences::default(), &job.evidence);
+            let summary = registry.summarize_blocking(&job.preferences, &job.evidence);
             let _ = result_tx.send(SummaryResult {
                 session_id: job.session_id,
                 signature: job.signature,
                 substantive_signature: job.substantive_signature,
-                summary: summary.value,
+                summary,
             });
         }
     });
@@ -1650,12 +1656,11 @@ fn spawn_naming_worker() -> Option<NamingWorker> {
 
     thread::spawn(move || {
         while let Ok(job) = request_rx.recv() {
-            let suggestion =
-                registry.suggest_name_blocking(&ProviderPreferences::default(), &job.evidence);
+            let suggestion = registry.suggest_name_blocking(&job.preferences, &job.evidence);
             let _ = result_tx.send(NamingResult {
                 session_id: job.session_id,
                 signature: job.signature,
-                suggestion: suggestion.value,
+                suggestion,
             });
         }
     });
@@ -1920,7 +1925,10 @@ fn drain_naming_results(context: &Rc<AppContext>) {
         entry.in_flight = false;
         entry.requested_signature = None;
         entry.last_attempt = Some(Instant::now());
-        match result.suggestion {
+        if let Some(provider) = result.suggestion.demoted_provider {
+            record_provider_demotion(&mut entry.skipped_providers, provider);
+        }
+        match result.suggestion.value {
             Ok(suggestion) => {
                 entry.completed_signature = Some(result.signature);
                 if !suggestion.name.is_empty() {
@@ -2071,7 +2079,10 @@ fn drain_summary_results(context: &Rc<AppContext>) {
         entry.in_flight = false;
         entry.requested_signature = None;
         entry.last_attempt = Some(Instant::now());
-        match result.summary {
+        if let Some(provider) = result.summary.demoted_provider {
+            record_provider_demotion(&mut entry.skipped_providers, provider);
+        }
+        match result.summary.value {
             Ok(summary) => {
                 entry.completed_signature = Some(result.signature);
                 entry.completed_substantive_signature = Some(result.substantive_signature);
@@ -2228,6 +2239,7 @@ fn maybe_queue_summary(
         signature,
         substantive_signature,
         evidence: evidence.clone(),
+        preferences: active_provider_preferences(&entry.skipped_providers),
     });
 }
 
@@ -2270,7 +2282,27 @@ fn maybe_queue_name(context: &Rc<AppContext>, session_id: SessionId, evidence: &
         session_id,
         signature,
         evidence: evidence.clone(),
+        preferences: active_provider_preferences(&entry.skipped_providers),
     });
+}
+
+fn active_provider_preferences(
+    skipped_providers: &BTreeMap<SynthesisProvider, Instant>,
+) -> ProviderPreferences {
+    let skipped_providers = skipped_providers
+        .iter()
+        .filter_map(|(provider, demoted_at)| {
+            (demoted_at.elapsed() < PROVIDER_DEMOTION_COOLDOWN).then_some(*provider)
+        })
+        .collect();
+    ProviderPreferences { skipped_providers }
+}
+
+fn record_provider_demotion(
+    skipped_providers: &mut BTreeMap<SynthesisProvider, Instant>,
+    provider: SynthesisProvider,
+) {
+    skipped_providers.insert(provider, Instant::now());
 }
 
 fn current_summary(
@@ -3016,8 +3048,12 @@ fn reparent_widget_to_box<W: IsA<gtk::Widget>>(widget: &W, target: &gtk::Box) {
 #[cfg(test)]
 mod tests {
     use super::{
-        CardChromeMode, RunMode, card_chrome_visibility, parse_run_mode, summary_refresh_interval,
+        CardChromeMode, PROVIDER_DEMOTION_COOLDOWN, RunMode, SummaryCacheEntry,
+        active_provider_preferences, card_chrome_visibility, parse_run_mode,
+        record_provider_demotion, summary_refresh_interval,
     };
+    use exaterm_core::synthesis::SynthesisProvider;
+    use std::collections::BTreeMap;
     use std::time::Duration;
 
     #[test]
@@ -3095,5 +3131,35 @@ mod tests {
         assert!(visibility.bars_visible);
         assert!(visibility.nudge_state_visible);
         assert!(visibility.nudge_row_visible);
+    }
+
+    #[test]
+    fn active_provider_preferences_excludes_expired_demotions() {
+        let mut skipped_providers = BTreeMap::new();
+        skipped_providers.insert(
+            SynthesisProvider::OpenAi,
+            std::time::Instant::now() - PROVIDER_DEMOTION_COOLDOWN - Duration::from_secs(1),
+        );
+        skipped_providers.insert(SynthesisProvider::CodexCli, std::time::Instant::now());
+
+        let preferences = active_provider_preferences(&skipped_providers);
+
+        assert!(!preferences
+            .skipped_providers
+            .contains(&SynthesisProvider::OpenAi));
+        assert!(preferences
+            .skipped_providers
+            .contains(&SynthesisProvider::CodexCli));
+    }
+
+    #[test]
+    fn record_provider_demotion_updates_summary_cache_preferences() {
+        let mut entry = SummaryCacheEntry::new();
+        record_provider_demotion(&mut entry.skipped_providers, SynthesisProvider::ClaudeCli);
+
+        let preferences = active_provider_preferences(&entry.skipped_providers);
+        assert!(preferences
+            .skipped_providers
+            .contains(&SynthesisProvider::ClaudeCli));
     }
 }
