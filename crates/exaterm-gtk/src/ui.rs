@@ -4,38 +4,39 @@ use crate::style::{
     apply_battle_card_surface_style, apply_battle_status_style, configure_app_icons, load_css,
 };
 use crate::terminal_adapter::{
-    attach_display_runtime, measured_terminal_size_hint, spawn_daemon_display_bridge,
-    spawn_runtime, terminal_size_hint, ClientDisplayRuntime,
+    ClientDisplayRuntime, attach_display_runtime, measured_terminal_size_hint,
+    spawn_daemon_display_bridge, spawn_runtime, terminal_size_hint,
 };
-use crate::widgets::{build_segmented_bar, FocusWidgets, SegmentedBarWidgets, SessionCardWidgets};
+use crate::widgets::{FocusWidgets, SegmentedBarWidgets, SessionCardWidgets, build_segmented_bar};
 use exaterm_core::model::{
     blocking_prompt_launch, planning_stream_launch, running_stream_launch, ssh_shell_launch,
     user_shell_launch,
 };
 use exaterm_core::observation::{
-    apply_stream_update, build_naming_evidence, build_tactical_evidence, is_bare_waiting_shell,
-    refresh_observation as refresh_session_observation, scrollback_fragments, SessionObservation,
+    SessionObservation, apply_stream_update, build_naming_evidence, build_tactical_evidence,
+    is_bare_waiting_shell, refresh_observation as refresh_session_observation,
+    scrollback_fragments,
 };
 use exaterm_core::runtime::{RuntimeEvent, SessionRuntime};
 use exaterm_core::synthesis::{
-    name_signature, should_skip_repeated_paused_summary, suggest_name_blocking, summarize_blocking,
-    summary_signature, summary_substantive_signature, NamingEvidence, OpenAiNamingConfig,
-    OpenAiSynthesisConfig, TacticalEvidence,
+    NamingEvidence, ProviderPreferences, SynthesisBackendRegistry, TacticalEvidence,
+    name_signature, should_skip_repeated_paused_summary, summary_signature,
+    summary_substantive_signature,
 };
 use exaterm_types::model::{SessionId, SessionLaunch, SessionRecord};
 use exaterm_types::proto::{ClientMessage, ObservationSnapshot, ServerMessage, WorkspaceSnapshot};
 use exaterm_types::synthesis::{AttentionLevel, NameSuggestion, TacticalState, TacticalSynthesis};
-use exaterm_ui::beachhead::{parse_run_mode, BeachheadTarget, RunMode};
+use exaterm_ui::beachhead::{BeachheadTarget, RunMode, parse_run_mode};
 use exaterm_ui::layout::{
     battlefield_can_embed_terminals, battlefield_columns,
     visible_scrollback_line_capacity as layout_visible_scrollback_line_capacity,
 };
 use exaterm_ui::presentation::{
-    attention_bar_presentation, chrome_visibility, combined_focus_summary_text,
-    nudge_state_presentation, status_chip_label, ChromeVisibility as CardChromeVisibility,
+    ChromeVisibility as CardChromeVisibility, attention_bar_presentation, chrome_visibility,
+    combined_focus_summary_text, nudge_state_presentation, status_chip_label,
 };
 use exaterm_ui::supervision::{
-    build_battle_card, BattleCardStatus, BattleCardViewModel, ObservedActivity, SignalTone,
+    BattleCardStatus, BattleCardViewModel, ObservedActivity, SignalTone, build_battle_card,
 };
 use exaterm_ui::workspace_view::WorkspaceViewState;
 use gtk::gdk;
@@ -50,7 +51,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 use vte::prelude::*;
@@ -265,8 +266,6 @@ pub(crate) fn daemon_backed(context: &AppContext) -> bool {
 fn build_ui(app: &gtk::Application, mode: RunMode) {
     load_css();
     configure_app_icons(APP_ID);
-    let missing_openai_key =
-        !visual_gallery_enabled() && OpenAiSynthesisConfig::from_env().is_none();
     let beachhead = if visual_gallery_enabled() {
         None
     } else {
@@ -693,9 +692,6 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
     }
 
     window.present();
-    if missing_openai_key {
-        present_openai_key_warning(&window);
-    }
 }
 
 fn parse_rgba(hex: &str) -> gdk::RGBA {
@@ -770,19 +766,6 @@ fn present_startup_error(app: &gtk::Application, error: &str) {
     });
 
     window.present();
-}
-
-fn present_openai_key_warning(window: &adw::ApplicationWindow) {
-    let dialog = adw::AlertDialog::builder()
-        .heading("OpenAI API key missing")
-        .body(
-            "Exaterm started, but `OPENAI_API_KEY` is not set. Tactical summaries, naming, and auto-nudge are disabled until you provide a key.",
-        )
-        .close_response("ok")
-        .build();
-    dialog.add_response("ok", "OK");
-    dialog.set_default_response(Some("ok"));
-    dialog.present(Some(window));
 }
 
 fn default_shell_launch(context: &Rc<AppContext>, number: usize) -> SessionLaunch {
@@ -1637,18 +1620,19 @@ fn spawn_session(
 }
 
 fn spawn_summary_worker() -> Option<SummaryWorker> {
-    let config = OpenAiSynthesisConfig::from_env()?;
+    let registry = SynthesisBackendRegistry::from_env()?;
     let (request_tx, request_rx) = mpsc::channel::<SummaryJob>();
     let (result_tx, result_rx) = mpsc::channel::<SummaryResult>();
 
     thread::spawn(move || {
         while let Ok(job) = request_rx.recv() {
-            let summary = summarize_blocking(&config, &job.evidence);
+            let summary =
+                registry.summarize_blocking(&ProviderPreferences::default(), &job.evidence);
             let _ = result_tx.send(SummaryResult {
                 session_id: job.session_id,
                 signature: job.signature,
                 substantive_signature: job.substantive_signature,
-                summary,
+                summary: summary.value,
             });
         }
     });
@@ -1660,17 +1644,18 @@ fn spawn_summary_worker() -> Option<SummaryWorker> {
 }
 
 fn spawn_naming_worker() -> Option<NamingWorker> {
-    let config = OpenAiNamingConfig::from_env()?;
+    let registry = SynthesisBackendRegistry::from_env()?;
     let (request_tx, request_rx) = mpsc::channel::<NamingJob>();
     let (result_tx, result_rx) = mpsc::channel::<NamingResult>();
 
     thread::spawn(move || {
         while let Ok(job) = request_rx.recv() {
-            let suggestion = suggest_name_blocking(&config, &job.evidence);
+            let suggestion =
+                registry.suggest_name_blocking(&ProviderPreferences::default(), &job.evidence);
             let _ = result_tx.send(NamingResult {
                 session_id: job.session_id,
                 signature: job.signature,
-                suggestion,
+                suggestion: suggestion.value,
             });
         }
     });
@@ -3031,7 +3016,7 @@ fn reparent_widget_to_box<W: IsA<gtk::Widget>>(widget: &W, target: &gtk::Box) {
 #[cfg(test)]
 mod tests {
     use super::{
-        card_chrome_visibility, parse_run_mode, summary_refresh_interval, CardChromeMode, RunMode,
+        CardChromeMode, RunMode, card_chrome_visibility, parse_run_mode, summary_refresh_interval,
     };
     use std::time::Duration;
 
