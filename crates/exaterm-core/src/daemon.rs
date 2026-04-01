@@ -1,19 +1,20 @@
-use crate::file_watch::{RepoWatchHandle, spawn_repo_watch};
-use crate::model::{SessionId, SessionLaunch, WorkspaceStore, user_shell_launch};
+use crate::file_watch::{spawn_repo_watch, RepoWatchHandle};
+use crate::model::{user_shell_launch, SessionId, SessionLaunch, WorkspaceStore};
 use crate::observation::{
-    SessionObservation, apply_file_activity, apply_observation_refresh, apply_stream_update,
-    build_naming_evidence, build_nudge_evidence, build_tactical_evidence, clear_file_activity,
+    apply_file_activity, apply_observation_refresh, apply_stream_update, build_naming_evidence,
+    build_nudge_evidence, build_tactical_evidence, clear_file_activity,
     compute_observation_refresh, find_git_worktree_root, is_bare_waiting_shell,
+    record_terminal_input_activity, SessionObservation,
 };
 use crate::proto::{
     ClientMessage, ObservationSnapshot, ServerMessage, SessionSnapshot, WorkspaceSnapshot,
 };
-use crate::runtime::{RuntimeEvent, SessionRuntime, spawn_headless_runtime};
+use crate::runtime::{spawn_headless_runtime, RuntimeEvent, SessionRuntime};
 use crate::synthesis::{
+    name_signature, nudge_signature, should_skip_repeated_paused_summary, suggest_name_blocking,
+    suggest_nudge_blocking, summarize_blocking, summary_signature, summary_substantive_signature,
     NameSuggestion, NamingEvidence, NudgeEvidence, NudgeSuggestion, OpenAiNamingConfig,
-    OpenAiNudgeConfig, OpenAiSynthesisConfig, TacticalState, TacticalSynthesis, name_signature,
-    nudge_signature, suggest_name_blocking, suggest_nudge_blocking, summarize_blocking,
-    summary_signature,
+    OpenAiNudgeConfig, OpenAiSynthesisConfig, TacticalState, TacticalSynthesis,
 };
 use portable_pty::PtySize;
 use serde::Serialize;
@@ -36,6 +37,8 @@ const CANONICAL_TERMINAL_COLS: u16 = 120;
 const REPLAY_BYTES_LIMIT: usize = 8 * 1024 * 1024;
 const REFRESH_INTERVAL: Duration = Duration::from_millis(900);
 const CONTROL_EVENTS_PER_TICK: usize = 128;
+const TERMINAL_RETURN_DELAY: Duration = Duration::from_millis(35);
+const MIN_IDLE_SECS_FOR_NUDGE: u64 = 20;
 
 struct SummaryWorker {
     requests: mpsc::Sender<SummaryJob>,
@@ -45,12 +48,14 @@ struct SummaryWorker {
 struct SummaryJob {
     session_id: SessionId,
     signature: String,
+    substantive_signature: String,
     evidence: crate::synthesis::TacticalEvidence,
 }
 
 struct SummaryResult {
     session_id: SessionId,
     signature: String,
+    substantive_signature: String,
     summary: Result<TacticalSynthesis, String>,
 }
 
@@ -132,6 +137,7 @@ struct NudgeResult {
 struct SummaryCacheEntry {
     first_seen: Instant,
     completed_signature: Option<String>,
+    completed_substantive_signature: Option<String>,
     requested_signature: Option<String>,
     last_summary: Option<TacticalSynthesis>,
     last_attempt: Option<Instant>,
@@ -165,6 +171,7 @@ impl SummaryCacheEntry {
         Self {
             first_seen: Instant::now(),
             completed_signature: None,
+            completed_substantive_signature: None,
             requested_signature: None,
             last_summary: None,
             last_attempt: None,
@@ -404,6 +411,7 @@ enum ClientControl {
     Message(ClientMessage),
     ControlDisconnected,
     StreamDisconnected(SessionId),
+    TerminalInput(SessionId),
     FileActivity {
         repo_root: PathBuf,
         relative_path: String,
@@ -529,9 +537,7 @@ fn run_local_daemon_inner() -> Result<(), String> {
         fs::create_dir_all(parent)
             .map_err(|error| format!("failed to create daemon socket dir: {error}"))?;
     }
-    if control_socket_path.exists() {
-        let _ = fs::remove_file(&control_socket_path);
-    }
+    clear_stale_control_socket(&control_socket_path)?;
 
     let control_listener = UnixListener::bind(&control_socket_path)
         .map_err(|error| format!("failed to bind daemon control socket: {error}"))?;
@@ -712,6 +718,9 @@ fn run_local_daemon_inner() -> Result<(), String> {
                         }
                     }
                 }
+                ClientControl::TerminalInput(session_id) => {
+                    note_terminal_input_activity(&mut state, session_id);
+                }
                 ClientControl::FileActivity {
                     repo_root,
                     relative_path,
@@ -785,6 +794,33 @@ fn handle_client_message(
             if additions == 0 {
                 return Ok(false);
             }
+            let cwd = state
+                .workspace
+                .session(source_session)
+                .and_then(|session| session.launch.cwd.clone());
+            for _ in 0..additions {
+                let number = state.workspace.sessions().len() + 1;
+                let mut launch =
+                    user_shell_launch(format!("Shell {number}"), "Generic command session");
+                if let Some(cwd) = cwd.clone() {
+                    launch = launch.with_cwd(cwd);
+                }
+                let session_id = state.add_shell_session_without_watch(launch.clone())?;
+                state.attach_repo_watch(session_id, &launch, control_tx)?;
+                ensure_runtime_forwarder(state, session_id, control_tx.clone());
+            }
+            state.snapshot_dirty = true;
+            Ok(false)
+        }
+        ClientMessage::AddTerminalsTo {
+            source_session,
+            target_total,
+        } => {
+            let current_total = state.workspace.sessions().len();
+            if target_total <= current_total || !supported_terminal_target(target_total) {
+                return Ok(false);
+            }
+            let additions = target_total - current_total;
             let cwd = state
                 .workspace
                 .session(source_session)
@@ -942,6 +978,7 @@ fn maybe_queue_summary(
         return;
     };
     let signature = summary_signature(evidence);
+    let substantive_signature = summary_substantive_signature(evidence);
     let entry = state
         .summary_cache
         .entry(session_id)
@@ -950,6 +987,13 @@ fn maybe_queue_summary(
         || entry.requested_signature.as_deref() == Some(signature.as_str())
         || entry.in_flight
     {
+        return;
+    }
+    if should_skip_repeated_paused_summary(
+        entry.last_summary.as_ref(),
+        entry.completed_substantive_signature.as_deref(),
+        &substantive_signature,
+    ) {
         return;
     }
     let refresh_interval = summary_refresh_interval(entry.first_seen.elapsed());
@@ -965,6 +1009,7 @@ fn maybe_queue_summary(
     let _ = worker.requests.send(SummaryJob {
         session_id,
         signature,
+        substantive_signature,
         evidence: evidence.clone(),
     });
 }
@@ -1018,7 +1063,7 @@ fn maybe_queue_nudge(
     if !looks_like_coding_agent(shell_child_command) {
         return;
     }
-    if observation.last_change.elapsed().as_secs() < 20 {
+    if observation.last_change.elapsed().as_secs() < MIN_IDLE_SECS_FOR_NUDGE {
         return;
     }
     let entry = state
@@ -1100,6 +1145,7 @@ fn drain_worker_results(state: &mut DaemonState) -> bool {
             entry.requested_signature = None;
             if let Ok(summary) = result.summary {
                 entry.completed_signature = Some(result.signature);
+                entry.completed_substantive_signature = Some(result.substantive_signature);
                 entry.last_summary = Some(summary);
                 changed = true;
             }
@@ -1126,29 +1172,38 @@ fn drain_worker_results(state: &mut DaemonState) -> bool {
         }
     }
 
-    if let Some(worker) = state.nudge_worker.as_ref() {
-        while let Ok(result) = worker.responses.try_recv() {
-            let mut suggestion_text = None::<String>;
-            {
-                let entry = state
-                    .nudge_cache
-                    .entry(result.session_id)
-                    .or_insert_with(NudgeCacheEntry::new);
-                entry.in_flight = false;
-                entry.requested_signature = None;
-                if let Ok(suggestion) = result.suggestion {
-                    entry.completed_signature = Some(result.signature);
-                    entry.last_nudge =
-                        (!suggestion.text.is_empty()).then_some(suggestion.text.clone());
-                    suggestion_text = (!suggestion.text.is_empty()).then_some(suggestion.text);
-                    changed = true;
-                }
+    loop {
+        let result = {
+            let Some(worker) = state.nudge_worker.as_ref() else {
+                break;
+            };
+            worker.responses.try_recv().ok()
+        };
+        let Some(result) = result else {
+            break;
+        };
+
+        let mut suggestion_text = None::<String>;
+        {
+            let entry = state
+                .nudge_cache
+                .entry(result.session_id)
+                .or_insert_with(NudgeCacheEntry::new);
+            entry.in_flight = false;
+            entry.requested_signature = None;
+            if let Ok(suggestion) = result.suggestion {
+                entry.completed_signature = Some(result.signature);
+                entry.last_nudge = (!suggestion.text.is_empty()).then_some(suggestion.text.clone());
+                suggestion_text = (!suggestion.text.is_empty()).then_some(suggestion.text);
+                changed = true;
             }
-            if let Some(text) = suggestion_text {
-                if send_runtime_input_line(state, result.session_id, &text).is_ok() {
-                    if let Some(entry) = state.nudge_cache.get_mut(&result.session_id) {
-                        entry.last_sent = Some(Instant::now());
-                    }
+        }
+        if let Some(text) = suggestion_text {
+            if session_still_accepts_nudge(state, result.session_id)
+                && send_runtime_input_line(state, result.session_id, &text).is_ok()
+            {
+                if let Some(entry) = state.nudge_cache.get_mut(&result.session_id) {
+                    entry.last_sent = Some(Instant::now());
                 }
             }
         }
@@ -1181,17 +1236,26 @@ fn handle_runtime_event(
 }
 
 fn send_runtime_input_line(
-    state: &DaemonState,
+    state: &mut DaemonState,
     session_id: SessionId,
     line: &str,
 ) -> std::io::Result<()> {
-    let mut bytes = line.as_bytes().to_vec();
-    bytes.push(b'\n');
-    send_runtime_input_bytes(state, session_id, &bytes)
+    send_runtime_input_bytes(state, session_id, line.as_bytes())?;
+    thread::sleep(TERMINAL_RETURN_DELAY);
+    send_runtime_input_bytes(state, session_id, b"\r")
+}
+
+fn session_still_accepts_nudge(state: &DaemonState, session_id: SessionId) -> bool {
+    state
+        .observations
+        .get(&session_id)
+        .is_some_and(|observation| {
+            observation.last_change.elapsed().as_secs() >= MIN_IDLE_SECS_FOR_NUDGE
+        })
 }
 
 fn send_runtime_input_bytes(
-    state: &DaemonState,
+    state: &mut DaemonState,
     session_id: SessionId,
     bytes: &[u8],
 ) -> std::io::Result<()> {
@@ -1203,7 +1267,15 @@ fn send_runtime_input_bytes(
     let mut writer = writer
         .lock()
         .map_err(|_| std::io::Error::other("runtime input writer lock poisoned"))?;
-    writer.write_all(bytes)
+    writer.write_all(bytes)?;
+    note_terminal_input_activity(state, session_id);
+    Ok(())
+}
+
+fn note_terminal_input_activity(state: &mut DaemonState, session_id: SessionId) {
+    let observation = state.observations.entry(session_id).or_default();
+    record_terminal_input_activity(observation);
+    state.snapshot_dirty = true;
 }
 
 fn looks_like_coding_agent(command: &str) -> bool {
@@ -1261,6 +1333,7 @@ fn spawn_summary_worker() -> Option<SummaryWorker> {
             let _ = result_tx.send(SummaryResult {
                 session_id: job.session_id,
                 signature: job.signature,
+                substantive_signature: job.substantive_signature,
                 summary,
             });
         }
@@ -1417,6 +1490,7 @@ fn spawn_raw_stream_reader(
                     if writer.write_all(&buf[..n]).is_err() {
                         break;
                     }
+                    let _ = control_tx.send(ClientControl::TerminalInput(session_id));
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(_) => {
@@ -1515,6 +1589,18 @@ fn connect_control_socket() -> Result<UnixStream, String> {
         .map_err(|error| format!("failed to connect control socket: {error}"))
 }
 
+fn clear_stale_control_socket(control_socket_path: &PathBuf) -> Result<(), String> {
+    if !control_socket_path.exists() {
+        return Ok(());
+    }
+
+    match UnixStream::connect(control_socket_path) {
+        Ok(_) => Err("beachhead daemon already running".into()),
+        Err(_) => fs::remove_file(control_socket_path)
+            .map_err(|error| format!("failed to remove stale daemon control socket: {error}")),
+    }
+}
+
 pub fn connect_session_stream_socket(socket_name: &str) -> Result<UnixStream, String> {
     UnixStream::connect(session_raw_socket_path(socket_name)?)
         .map_err(|error| format!("failed to connect session raw socket: {error}"))
@@ -1524,9 +1610,15 @@ fn additions_for_session_count(count: usize) -> usize {
     match count {
         1 => 1,
         2 | 4 | 6 => 2,
-        8 | 12 => 4,
+        8 => 1,
+        9 => 3,
+        12 => 4,
         _ => 0,
     }
+}
+
+fn supported_terminal_target(count: usize) -> bool {
+    matches!(count, 1 | 2 | 4 | 6 | 8 | 9 | 12 | 16)
 }
 
 fn create_session_stream_state(session_id: SessionId) -> Result<SessionStreamState, String> {
@@ -1616,7 +1708,8 @@ mod tests {
         assert_eq!(additions_for_session_count(2), 2);
         assert_eq!(additions_for_session_count(4), 2);
         assert_eq!(additions_for_session_count(6), 2);
-        assert_eq!(additions_for_session_count(8), 4);
+        assert_eq!(additions_for_session_count(8), 1);
+        assert_eq!(additions_for_session_count(9), 3);
         assert_eq!(additions_for_session_count(12), 4);
     }
 
@@ -1626,6 +1719,45 @@ mod tests {
         assert_eq!(additions_for_session_count(5), 0);
         assert_eq!(additions_for_session_count(10), 0);
         assert_eq!(additions_for_session_count(16), 0);
+    }
+
+    #[test]
+    fn supported_terminal_targets_include_nine_tile_layout() {
+        assert!(supported_terminal_target(9));
+        assert!(supported_terminal_target(16));
+        assert!(!supported_terminal_target(10));
+        assert!(!supported_terminal_target(11));
+    }
+
+    #[test]
+    fn nudge_only_applies_if_session_is_still_idle() {
+        let mut state = DaemonState::new();
+        let session_id = SessionId(7);
+
+        let mut stale = SessionObservation::new();
+        stale.last_change = Instant::now() - Duration::from_secs(MIN_IDLE_SECS_FOR_NUDGE + 5);
+        state.observations.insert(session_id, stale);
+        assert!(session_still_accepts_nudge(&state, session_id));
+
+        let mut fresh = SessionObservation::new();
+        fresh.last_change = Instant::now() - Duration::from_secs(MIN_IDLE_SECS_FOR_NUDGE - 1);
+        state.observations.insert(session_id, fresh);
+        assert!(!session_still_accepts_nudge(&state, session_id));
+    }
+
+    #[test]
+    fn terminal_input_activity_blocks_a_pending_nudge() {
+        let mut state = DaemonState::new();
+        let session_id = SessionId(7);
+
+        let mut stale = SessionObservation::new();
+        stale.last_change = Instant::now() - Duration::from_secs(MIN_IDLE_SECS_FOR_NUDGE + 5);
+        state.observations.insert(session_id, stale);
+        assert!(session_still_accepts_nudge(&state, session_id));
+
+        note_terminal_input_activity(&mut state, session_id);
+
+        assert!(!session_still_accepts_nudge(&state, session_id));
     }
 
     fn env_lock() -> &'static Mutex<()> {

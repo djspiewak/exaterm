@@ -64,6 +64,10 @@ pub fn apply_stream_update(observation: &mut SessionObservation, update: StreamR
     }
 }
 
+pub fn record_terminal_input_activity(observation: &mut SessionObservation) {
+    observation.last_change = Instant::now();
+}
+
 pub fn apply_file_activity(
     observation: &mut SessionObservation,
     relative_path: String,
@@ -216,7 +220,7 @@ pub fn build_nudge_evidence(
 }
 
 pub fn synthesis_terminal_activity(observation: &SessionObservation) -> Vec<String> {
-    let mut entries = model_terminal_history_window(observation);
+    let mut entries = model_terminal_history_window(observation, 5 * 60, 256);
 
     if let Some(painted) = observation.painted_line.as_deref() {
         let trimmed = painted.trim();
@@ -229,11 +233,11 @@ pub fn synthesis_terminal_activity(observation: &SessionObservation) -> Vec<Stri
 }
 
 pub fn naming_terminal_history(observation: &SessionObservation) -> Vec<String> {
-    model_terminal_history_window(observation)
+    model_terminal_history_window(observation, 5 * 60, 256)
 }
 
 pub fn nudge_terminal_history(observation: &SessionObservation) -> Vec<String> {
-    model_terminal_history_window(observation)
+    model_terminal_history_window(observation, 10 * 60, 512)
 }
 
 pub fn scrollback_fragments(observation: &SessionObservation, limit: usize) -> Vec<String> {
@@ -305,21 +309,23 @@ fn append_terminal_activity(activity: &mut Vec<TerminalActivityEntry>, candidate
     }
 }
 
-fn model_terminal_history_window(observation: &SessionObservation) -> Vec<String> {
-    const MODEL_HISTORY_MIN_LINES: usize = 256;
-    const MODEL_HISTORY_MIN_AGE: Duration = Duration::from_secs(5 * 60);
-
+fn model_terminal_history_window(
+    observation: &SessionObservation,
+    min_age_secs: u64,
+    min_lines: usize,
+) -> Vec<String> {
+    let min_age = Duration::from_secs(min_age_secs);
     let now = Instant::now();
     let total = observation.terminal_activity.len();
     if total == 0 {
         return Vec::new();
     }
 
-    let line_start = total.saturating_sub(MODEL_HISTORY_MIN_LINES);
+    let line_start = total.saturating_sub(min_lines);
     let time_start = observation
         .terminal_activity
         .iter()
-        .position(|entry| now.duration_since(entry.at) <= MODEL_HISTORY_MIN_AGE)
+        .position(|entry| now.duration_since(entry.at) <= min_age)
         .unwrap_or(total.saturating_sub(1));
     let start = line_start.min(time_start);
 
@@ -416,7 +422,11 @@ fn read_process_hints(pid: u32) -> (Option<String>, Option<String>, Option<Strin
             .filter(|l| !l.is_empty())
             .collect::<Vec<_>>()
             .join(" | ");
-        if t.is_empty() { None } else { Some(t) }
+        if t.is_empty() {
+            None
+        } else {
+            Some(t)
+        }
     };
     (dominant, direct, tree)
 }
@@ -429,12 +439,13 @@ fn is_meaningful_output_line(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        SessionObservation, TerminalActivityEntry, append_recent_lines, apply_file_activity,
-        compute_observation_refresh, effective_display_name, find_git_worktree_root,
-        is_bare_waiting_shell, naming_terminal_history, synthesis_terminal_activity,
+        append_recent_lines, apply_file_activity, compute_observation_refresh,
+        effective_display_name, find_git_worktree_root, is_bare_waiting_shell,
+        naming_terminal_history, record_terminal_input_activity, synthesis_terminal_activity,
+        SessionObservation, TerminalActivityEntry,
     };
     use crate::model::{
-        SessionId, SessionKind, SessionLaunch, SessionRecord, SessionStatus, user_shell_launch,
+        user_shell_launch, SessionId, SessionKind, SessionLaunch, SessionRecord, SessionStatus,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -490,16 +501,12 @@ mod tests {
 
         let history = synthesis_terminal_activity(&observation);
         assert_eq!(history.len(), 256);
-        assert!(
-            history
-                .first()
-                .is_some_and(|line| line.ends_with("line 44"))
-        );
-        assert!(
-            history
-                .last()
-                .is_some_and(|line| line.ends_with("line 299"))
-        );
+        assert!(history
+            .first()
+            .is_some_and(|line| line.ends_with("line 44")));
+        assert!(history
+            .last()
+            .is_some_and(|line| line.ends_with("line 299")));
     }
 
     #[test]
@@ -515,16 +522,12 @@ mod tests {
 
         let history = naming_terminal_history(&observation);
         assert_eq!(history.len(), 299);
-        assert!(
-            history
-                .first()
-                .is_some_and(|line| line.ends_with("line 101"))
-        );
-        assert!(
-            history
-                .last()
-                .is_some_and(|line| line.ends_with("line 399"))
-        );
+        assert!(history
+            .first()
+            .is_some_and(|line| line.ends_with("line 101")));
+        assert!(history
+            .last()
+            .is_some_and(|line| line.ends_with("line 399")));
     }
 
     #[test]
@@ -678,6 +681,16 @@ mod tests {
 
         assert_eq!(observation.recent_files, vec!["fresh.rs".to_string()]);
         assert!(!observation.recent_file_activity.contains_key("old.rs"));
+    }
+
+    #[test]
+    fn terminal_input_activity_resets_last_change() {
+        let mut observation = SessionObservation::new();
+        observation.last_change = Instant::now() - Duration::from_secs(30);
+
+        record_terminal_input_activity(&mut observation);
+
+        assert!(observation.last_change.elapsed() < Duration::from_secs(2));
     }
 
     fn tempdir_path(prefix: &str) -> PathBuf {

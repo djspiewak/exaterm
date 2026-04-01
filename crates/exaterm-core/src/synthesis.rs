@@ -2,7 +2,7 @@ pub use exaterm_types::synthesis::{
     AttentionLevel, NameSuggestion, NudgeSuggestion, TacticalState, TacticalSynthesis,
 };
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -10,8 +10,9 @@ use std::path::Path;
 
 const DEFAULT_SUMMARY_MODEL: &str = "gpt-5.4-mini";
 const DEFAULT_NAMING_MODEL: &str = "gpt-5.4-mini";
-const DEFAULT_NUDGE_MODEL: &str = "gpt-5.4-mini";
+const DEFAULT_NUDGE_MODEL: &str = "gpt-5.4";
 const DEFAULT_REASONING_EFFORT: &str = "medium";
+const DEFAULT_NUDGE_REASONING_EFFORT: &str = "high";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TacticalEvidence {
@@ -196,6 +197,31 @@ pub fn summary_signature(evidence: &TacticalEvidence) -> String {
     .to_string()
 }
 
+pub fn summary_substantive_signature(evidence: &TacticalEvidence) -> String {
+    json!({
+        "session_name": evidence.session_name,
+        "task_label": evidence.task_label,
+        "dominant_process": evidence.dominant_process,
+        "process_tree_excerpt": evidence.process_tree_excerpt,
+        "recent_files": evidence.recent_files,
+        "terminal_status_line": evidence.terminal_status_line,
+        "recent_terminal_activity": strip_time_annotated_lines(&evidence.recent_terminal_activity),
+        "recent_events": strip_time_annotated_lines(&evidence.recent_events),
+    })
+    .to_string()
+}
+
+pub fn should_skip_repeated_paused_summary(
+    last_summary: Option<&TacticalSynthesis>,
+    completed_substantive_signature: Option<&str>,
+    substantive_signature: &str,
+) -> bool {
+    matches!(
+        last_summary.map(|summary| summary.tactical_state),
+        Some(TacticalState::Stopped | TacticalState::Blocked)
+    ) && completed_substantive_signature == Some(substantive_signature)
+}
+
 fn idle_bucket(idle_seconds: Option<u64>) -> Option<&'static str> {
     match idle_seconds? {
         0..=4 => Some("0-4s"),
@@ -235,6 +261,13 @@ fn normalize_time_annotated_lines(lines: &[String]) -> Vec<String> {
         .collect()
 }
 
+fn strip_time_annotated_lines(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| strip_time_annotated_line(line))
+        .collect()
+}
+
 fn normalize_time_annotated_line(line: &str) -> String {
     let Some((prefix, payload)) = line.split_once("] ") else {
         return line.to_string();
@@ -246,6 +279,17 @@ fn normalize_time_annotated_line(line: &str) -> String {
         return line.to_string();
     };
     format!("[{bucket}] {payload}")
+}
+
+fn strip_time_annotated_line(line: &str) -> String {
+    let Some((prefix, payload)) = line.split_once("] ") else {
+        return line.to_string();
+    };
+    if prefix.starts_with('[') {
+        payload.to_string()
+    } else {
+        line.to_string()
+    }
 }
 
 fn relative_age_bucket(label: Option<&str>) -> Option<&'static str> {
@@ -293,7 +337,7 @@ pub fn summarize_blocking(
 ) -> Result<TacticalSynthesis, String> {
     let request_body = json!({
         "model": config.model,
-        "reasoning_effort": DEFAULT_REASONING_EFFORT,
+        "reasoning_effort": DEFAULT_NUDGE_REASONING_EFFORT,
         "messages": [
             {
                 "role": "system",
@@ -573,14 +617,22 @@ The session has already been classified as stopped rather than idle, blocked, or
 You are also given the current executing command directly under the shell.
 If there is no current direct shell child command, or it does not look like a coding agent, return an empty string.
 
-Your job is to write a brief, context-aware push that can help the agent resume useful work.
+Your job is to choose one very generic restart prompt that can help the agent resume useful work.
 Use only the provided evidence.
-Do not ask questions unless absolutely necessary.
+Do not ask questions.
 Do not mention Exaterm, JSON, or that you are an AI.
 Do not explain your reasoning.
 Do not be verbose.
-Prefer simple concrete nudges like continue, keep going, focus on the next failing step, rerun the relevant test, or finish the in-progress repair.
-Do not suggest risky or destructive actions unless the evidence strongly and explicitly supports them.
+Do not give task-specific advice.
+Do not mention files, tests, errors, plans, or the next concrete step.
+Choose exactly one of these strings:
+- ""
+- "Continue."
+- "Keep going."
+- "Proceed."
+- "Resume."
+
+Prefer the simplest valid nudge.
 If there is no safe, useful nudge, return an empty string.
 
 Return JSON only.
@@ -630,7 +682,10 @@ fn nudge_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
-            "text": { "type": "string" }
+            "text": {
+                "type": "string",
+                "enum": ["", "Continue.", "Keep going.", "Proceed.", "Resume."]
+            }
         },
         "required": ["text"],
         "additionalProperties": false
@@ -679,10 +734,11 @@ pub fn extract_response_text(payload: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AttentionLevel, NameSuggestion, NamingEvidence, NudgeEvidence, TacticalEvidence,
-        TacticalState, TacticalSynthesis, extract_response_text, name_signature,
-        normalize_naming_model, normalize_summary_model, nudge_signature,
-        openai_chat_completions_url, summary_signature, synthesis_schema, tactical_system_prompt,
+        extract_response_text, name_signature, normalize_naming_model, normalize_summary_model,
+        nudge_schema, nudge_signature, openai_chat_completions_url,
+        should_skip_repeated_paused_summary, summary_signature, summary_substantive_signature,
+        synthesis_schema, tactical_system_prompt, AttentionLevel, NameSuggestion, NamingEvidence,
+        NudgeEvidence, TacticalEvidence, TacticalState, TacticalSynthesis,
     };
     use serde_json::json;
     use std::sync::Mutex;
@@ -707,6 +763,22 @@ mod tests {
         assert_eq!(normalize_naming_model("gpt-5.4-mini"), "gpt-5.4-mini");
         assert_eq!(normalize_naming_model(""), "gpt-5.4-mini");
         assert_eq!(normalize_naming_model("gpt-5.4"), "gpt-5.4");
+    }
+
+    #[test]
+    fn nudge_schema_is_constrained_to_generic_prompts() {
+        let schema = nudge_schema();
+        let allowed = schema["properties"]["text"]["enum"]
+            .as_array()
+            .expect("nudge text enum");
+        let values = allowed
+            .iter()
+            .map(|value| value.as_str().expect("string enum"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            values,
+            vec!["", "Continue.", "Keep going.", "Proceed.", "Resume."]
+        );
     }
 
     #[test]
@@ -817,6 +889,57 @@ mod tests {
     }
 
     #[test]
+    fn summary_substantive_signature_ignores_idle_bucket_changes() {
+        let mut evidence = TacticalEvidence {
+            session_name: "Parser".into(),
+            task_label: "Fix".into(),
+            dominant_process: None,
+            process_tree_excerpt: None,
+            recent_files: vec![],
+            terminal_status_line: Some("Quiet after last rerun".into()),
+            terminal_status_line_age: Some("29s ago".into()),
+            recent_terminal_activity: vec!["[29s ago] Quiet after last rerun".into()],
+            recent_events: vec!["[29s ago] Spawned cargo test".into()],
+        };
+
+        let first = summary_substantive_signature(&evidence);
+        evidence.terminal_status_line_age = Some("30s ago".into());
+        evidence.recent_terminal_activity = vec!["[30s ago] Quiet after last rerun".into()];
+        evidence.recent_events = vec!["[30s ago] Spawned cargo test".into()];
+        assert_eq!(summary_substantive_signature(&evidence), first);
+    }
+
+    #[test]
+    fn repeated_paused_summary_skips_when_substantive_evidence_is_unchanged() {
+        let summary = TacticalSynthesis {
+            tactical_state: TacticalState::Blocked,
+            tactical_state_brief: Some("needs approval".into()),
+            attention_level: AttentionLevel::Intervene,
+            attention_brief: Some("human input required".into()),
+            headline: Some("awaiting approval".into()),
+        };
+
+        assert!(should_skip_repeated_paused_summary(
+            Some(&summary),
+            Some("same"),
+            "same",
+        ));
+        assert!(!should_skip_repeated_paused_summary(
+            Some(&summary),
+            Some("before"),
+            "after",
+        ));
+        assert!(!should_skip_repeated_paused_summary(
+            Some(&TacticalSynthesis {
+                tactical_state: TacticalState::Working,
+                ..summary.clone()
+            }),
+            Some("same"),
+            "same",
+        ));
+    }
+
+    #[test]
     fn name_signature_tracks_current_name_and_terminal_history() {
         let mut evidence = NamingEvidence {
             current_name: "Parser".into(),
@@ -918,11 +1041,9 @@ mod tests {
         assert!(fixtures.len() >= 12);
         assert!(fixtures.iter().any(|(name, _, _)| name.contains("codex")));
         assert!(fixtures.iter().any(|(name, _, _)| name.contains("claude")));
-        assert!(
-            fixtures
-                .iter()
-                .all(|(_, evidence, _)| evidence.recent_terminal_activity.len() >= 6)
-        );
+        assert!(fixtures
+            .iter()
+            .all(|(_, evidence, _)| evidence.recent_terminal_activity.len() >= 6));
         assert!(fixtures.iter().any(|(_, _, expectations)| {
             expectations
                 .attention_levels
@@ -1488,29 +1609,22 @@ mod tests {
     #[test]
     fn tactical_prompt_requires_real_state_and_high_bar_for_complete() {
         let prompt = tactical_system_prompt();
-        assert!(
-            prompt.contains(
-                "You must always choose a real tactical_state and a real attention_level."
-            )
-        );
+        assert!(prompt
+            .contains("You must always choose a real tactical_state and a real attention_level."));
         assert!(prompt.contains("use complete rarely; the bar is high"));
         assert!(prompt.contains("do not use complete for 'looks good'"));
-        assert!(
-            prompt
-                .contains("when unsure between idle and stopped after recent work, prefer stopped")
-        );
+        assert!(prompt
+            .contains("when unsure between idle and stopped after recent work, prefer stopped"));
     }
 
     #[test]
     fn synthesis_schema_requires_non_null_tactical_state() {
         let schema = synthesis_schema();
         assert_eq!(schema["properties"]["tactical_state"]["type"], "string");
-        assert!(
-            !schema["properties"]["tactical_state"]["enum"]
-                .as_array()
-                .expect("tactical_state enum should be an array")
-                .iter()
-                .any(|value| value.is_null())
-        );
+        assert!(!schema["properties"]["tactical_state"]["enum"]
+            .as_array()
+            .expect("tactical_state enum should be an array")
+            .iter()
+            .any(|value| value.is_null()));
     }
 }

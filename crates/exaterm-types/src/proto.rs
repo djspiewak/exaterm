@@ -10,6 +10,10 @@ pub enum ClientMessage {
     AddTerminals {
         source_session: SessionId,
     },
+    AddTerminalsTo {
+        source_session: SessionId,
+        target_total: usize,
+    },
     ResizeTerminal {
         session_id: SessionId,
         rows: u16,
@@ -28,12 +32,8 @@ pub enum ClientMessage {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
-    WorkspaceSnapshot {
-        snapshot: WorkspaceSnapshot,
-    },
-    Error {
-        message: String,
-    },
+    WorkspaceSnapshot { snapshot: WorkspaceSnapshot },
+    Error { message: String },
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

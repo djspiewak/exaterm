@@ -23,6 +23,8 @@ pub fn battlefield_columns(total: usize, available_width: i32, focused: bool) ->
             2
         } else if total <= 6 {
             3
+        } else if total == 9 {
+            3
         } else {
             4
         }) as u32;
@@ -41,6 +43,8 @@ pub fn battlefield_columns(total: usize, available_width: i32, focused: bool) ->
     } else if total == 4 {
         2
     } else if total == 6 {
+        3
+    } else if total == 9 {
         3
     } else if total <= 4 {
         if available_width >= 1800 {
@@ -222,6 +226,13 @@ mod tests {
     fn column_policy_keeps_two_terminal_layout_side_by_side() {
         assert_eq!(battlefield_columns(2, 1480, false), 2);
         assert_eq!(battlefield_columns(2, 1000, false), 1);
+    }
+
+    #[test]
+    fn nine_terminal_layout_stays_three_by_three() {
+        assert_eq!(battlefield_columns(9, 2200, false), 3);
+        assert_eq!(battlefield_columns(9, 1400, false), 3);
+        assert_eq!(battlefield_columns(9, -1, false), 3);
     }
 
     #[test]

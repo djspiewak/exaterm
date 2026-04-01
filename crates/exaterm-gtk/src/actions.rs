@@ -1,4 +1,4 @@
-use crate::ui::{AppContext, NudgeCacheEntry, refresh_runtime_and_cards, update_nudge_widgets};
+use crate::ui::{refresh_runtime_and_cards, update_nudge_widgets, AppContext, NudgeCacheEntry};
 use exaterm_types::model::SessionId;
 use exaterm_types::proto::ClientMessage;
 use std::fs::File;
@@ -14,8 +14,6 @@ pub(crate) fn toggle_auto_nudge(context: &Rc<AppContext>, session_id: SessionId)
         let entry = cache.entry(session_id).or_insert_with(NudgeCacheEntry::new);
         entry.enabled = !entry.enabled;
         if !entry.enabled {
-            entry.in_flight = false;
-            entry.requested_signature = None;
             entry.hovered = false;
         }
         entry.enabled
@@ -70,7 +68,9 @@ pub(crate) fn insert_terminal_number(
         })
         .collect::<Vec<_>>();
 
-    if context.sync_inputs_enabled.load(Ordering::Relaxed) {
+    if context.sync_inputs_enabled.load(Ordering::Relaxed)
+        && context.sync_inputs_permitted.load(Ordering::Relaxed)
+    {
         for (session_id, text) in session_numbers {
             let _ = send_session_input_text(context, session_id, &text);
         }
@@ -83,16 +83,6 @@ pub(crate) fn insert_terminal_number(
     {
         let _ = send_session_input_text(context, session_id, &text);
     }
-}
-
-pub(crate) fn send_runtime_input_line(
-    context: &Rc<AppContext>,
-    session_id: SessionId,
-    line: &str,
-) -> std::io::Result<()> {
-    let mut bytes = line.as_bytes().to_vec();
-    bytes.push(b'\n');
-    send_session_input_bytes(context, session_id, &bytes)
 }
 
 pub(crate) fn send_session_input_text(

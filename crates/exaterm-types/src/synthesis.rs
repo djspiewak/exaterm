@@ -102,7 +102,9 @@ fn sanitize_name(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AttentionLevel, NameSuggestion, NudgeSuggestion, TacticalState, TacticalSynthesis};
+    use super::{
+        AttentionLevel, NameSuggestion, NudgeSuggestion, TacticalState, TacticalSynthesis,
+    };
 
     #[test]
     fn tactical_synthesis_sanitize_trims_fields() {
@@ -116,8 +118,14 @@ mod tests {
         .sanitize();
 
         assert_eq!(summary.headline.as_deref(), Some("parser pass"));
-        assert_eq!(summary.tactical_state_brief.as_deref(), Some("stopped cleanly"));
-        assert_eq!(summary.attention_brief.as_deref(), Some("likely needs a small nudge"));
+        assert_eq!(
+            summary.tactical_state_brief.as_deref(),
+            Some("stopped cleanly")
+        );
+        assert_eq!(
+            summary.attention_brief.as_deref(),
+            Some("likely needs a small nudge")
+        );
     }
 
     #[test]

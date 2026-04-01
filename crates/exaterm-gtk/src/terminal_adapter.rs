@@ -4,13 +4,13 @@ use exaterm_core::runtime::{RuntimeEvent, SessionRuntime, SpawnedRuntime, Stream
 use exaterm_core::terminal_stream::TerminalStreamProcessor;
 use exaterm_types::model::SessionId;
 use exaterm_types::model::SessionLaunch;
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use vte4 as vte;
 use vte4::prelude::*;
@@ -77,6 +77,7 @@ pub fn spawn_daemon_display_bridge(
     output_writer: Arc<Mutex<File>>,
     raw_input_writers: Arc<Mutex<std::collections::BTreeMap<SessionId, Arc<Mutex<UnixStream>>>>>,
     sync_inputs_enabled: Arc<AtomicBool>,
+    sync_inputs_permitted: Arc<AtomicBool>,
     input_events: mpsc::Receiver<Vec<u8>>,
 ) {
     thread::spawn(move || {
@@ -94,7 +95,9 @@ pub fn spawn_daemon_display_bridge(
         let fanout_writers = raw_input_writers.clone();
         thread::spawn(move || {
             while let Ok(bytes) = input_events.recv() {
-                if sync_inputs_enabled.load(Ordering::Relaxed) {
+                if sync_inputs_enabled.load(Ordering::Relaxed)
+                    && sync_inputs_permitted.load(Ordering::Relaxed)
+                {
                     let targets = fanout_writers
                         .lock()
                         .map(|writers| {

@@ -15,21 +15,18 @@ use exaterm_core::model::{
     user_shell_launch,
 };
 use exaterm_core::observation::{
-    apply_stream_update, build_naming_evidence, build_nudge_evidence, build_tactical_evidence,
-    is_bare_waiting_shell, refresh_observation as refresh_session_observation,
-    scrollback_fragments, SessionObservation,
+    apply_stream_update, build_naming_evidence, build_tactical_evidence, is_bare_waiting_shell,
+    refresh_observation as refresh_session_observation, scrollback_fragments, SessionObservation,
 };
 use exaterm_core::runtime::{RuntimeEvent, SessionRuntime};
 use exaterm_core::synthesis::{
-    name_signature, nudge_signature, suggest_name_blocking, suggest_nudge_blocking,
-    summarize_blocking, summary_signature, NamingEvidence, NudgeEvidence, OpenAiNamingConfig,
-    OpenAiNudgeConfig, OpenAiSynthesisConfig, TacticalEvidence,
+    name_signature, should_skip_repeated_paused_summary, suggest_name_blocking, summarize_blocking,
+    summary_signature, summary_substantive_signature, NamingEvidence, OpenAiNamingConfig,
+    OpenAiSynthesisConfig, TacticalEvidence,
 };
 use exaterm_types::model::{SessionId, SessionLaunch, SessionRecord};
 use exaterm_types::proto::{ClientMessage, ObservationSnapshot, ServerMessage, WorkspaceSnapshot};
-use exaterm_types::synthesis::{
-    AttentionLevel, NameSuggestion, NudgeSuggestion, TacticalState, TacticalSynthesis,
-};
+use exaterm_types::synthesis::{AttentionLevel, NameSuggestion, TacticalState, TacticalSynthesis};
 use exaterm_ui::beachhead::{parse_run_mode, BeachheadTarget, RunMode};
 use exaterm_ui::layout::{
     battlefield_can_embed_terminals, battlefield_columns,
@@ -62,6 +59,13 @@ use vte::prelude::*;
 use vte4 as vte;
 
 const APP_ID: &str = "io.exaterm.Exaterm";
+const TERMINAL_LAYOUT_TARGETS: &[usize] = &[2, 4, 6, 8, 9, 12, 16];
+const TERMINATOR_AMBIENCE_FOREGROUND: &str = "#ffffff";
+const TERMINATOR_AMBIENCE_BACKGROUND: &str = "#000000";
+const TERMINATOR_AMBIENCE_PALETTE: [&str; 16] = [
+    "#2e3436", "#cc0000", "#4e9a06", "#c4a000", "#3465a4", "#75507b", "#06989a", "#d3d7cf",
+    "#555753", "#ef2929", "#8ae234", "#fce94f", "#729fcf", "#ad7fa8", "#34e2e2", "#eeeeec",
+];
 
 struct SummaryWorker {
     requests: mpsc::Sender<SummaryJob>,
@@ -85,38 +89,24 @@ struct NamingResult {
     suggestion: Result<NameSuggestion, String>,
 }
 
-struct NudgeWorker {
-    requests: mpsc::Sender<NudgeJob>,
-    responses: mpsc::Receiver<NudgeResult>,
-}
-
-struct NudgeJob {
-    session_id: SessionId,
-    signature: String,
-    evidence: NudgeEvidence,
-}
-
-struct NudgeResult {
-    session_id: SessionId,
-    signature: String,
-    suggestion: Result<NudgeSuggestion, String>,
-}
-
 struct SummaryJob {
     session_id: SessionId,
     signature: String,
+    substantive_signature: String,
     evidence: TacticalEvidence,
 }
 
 struct SummaryResult {
     session_id: SessionId,
     signature: String,
+    substantive_signature: String,
     summary: Result<TacticalSynthesis, String>,
 }
 
 struct SummaryCacheEntry {
     first_seen: Instant,
     completed_signature: Option<String>,
+    completed_substantive_signature: Option<String>,
     requested_signature: Option<String>,
     last_summary: Option<TacticalSynthesis>,
     last_error: Option<String>,
@@ -136,13 +126,7 @@ struct NamingCacheEntry {
 pub(crate) struct NudgeCacheEntry {
     pub(crate) enabled: bool,
     pub(crate) hovered: bool,
-    pub(crate) completed_signature: Option<String>,
-    pub(crate) requested_signature: Option<String>,
-    pub(crate) last_nudge: Option<String>,
-    pub(crate) last_error: Option<String>,
-    pub(crate) last_attempt: Option<Instant>,
     pub(crate) last_sent: Option<Instant>,
-    pub(crate) in_flight: bool,
 }
 
 impl SummaryCacheEntry {
@@ -150,6 +134,7 @@ impl SummaryCacheEntry {
         Self {
             first_seen: Instant::now(),
             completed_signature: None,
+            completed_substantive_signature: None,
             requested_signature: None,
             last_summary: None,
             last_error: None,
@@ -190,13 +175,7 @@ impl NudgeCacheEntry {
         Self {
             enabled: false,
             hovered: false,
-            completed_signature: None,
-            requested_signature: None,
-            last_nudge: None,
-            last_error: None,
-            last_attempt: None,
             last_sent: None,
-            in_flight: false,
         }
     }
 }
@@ -239,6 +218,7 @@ pub(crate) struct AppContext {
     cards: gtk::FlowBox,
     battlefield_panel: gtk::ScrolledWindow,
     pub(crate) sync_inputs_enabled: Arc<AtomicBool>,
+    pub(crate) sync_inputs_permitted: Arc<AtomicBool>,
     pub(crate) raw_input_writers: Arc<Mutex<BTreeMap<SessionId, Arc<Mutex<UnixStream>>>>>,
     focus: FocusWidgets,
     session_cards: RefCell<BTreeMap<SessionId, SessionCardWidgets>>,
@@ -250,7 +230,6 @@ pub(crate) struct AppContext {
     summary_cache: RefCell<BTreeMap<SessionId, SummaryCacheEntry>>,
     naming_worker: Option<NamingWorker>,
     naming_cache: RefCell<BTreeMap<SessionId, NamingCacheEntry>>,
-    nudge_worker: Option<NudgeWorker>,
     pub(crate) nudge_cache: RefCell<BTreeMap<SessionId, NudgeCacheEntry>>,
     closing_confirmed: Cell<bool>,
 }
@@ -526,6 +505,7 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
         cards,
         battlefield_panel,
         sync_inputs_enabled: Arc::new(AtomicBool::new(false)),
+        sync_inputs_permitted: Arc::new(AtomicBool::new(true)),
         raw_input_writers: Arc::new(Mutex::new(BTreeMap::new())),
         focus: FocusWidgets {
             panel: focus_panel,
@@ -559,11 +539,6 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
             None
         },
         naming_cache: RefCell::new(BTreeMap::new()),
-        nudge_worker: if visual_gallery_enabled() {
-            spawn_nudge_worker()
-        } else {
-            None
-        },
         nudge_cache: RefCell::new(BTreeMap::new()),
         closing_confirmed: Cell::new(false),
     });
@@ -723,6 +698,29 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
     if missing_openai_key {
         present_openai_key_warning(&window);
     }
+}
+
+fn parse_rgba(hex: &str) -> gdk::RGBA {
+    gdk::RGBA::parse(hex).expect("valid theme color")
+}
+
+fn apply_terminal_theme(terminal: &vte::Terminal) {
+    let foreground = parse_rgba(TERMINATOR_AMBIENCE_FOREGROUND);
+    let background = parse_rgba(TERMINATOR_AMBIENCE_BACKGROUND);
+    let palette = TERMINATOR_AMBIENCE_PALETTE
+        .iter()
+        .map(|color| parse_rgba(color))
+        .collect::<Vec<_>>();
+    let palette_refs = palette.iter().collect::<Vec<_>>();
+    let cursor = parse_rgba("#f2f2f2");
+    let highlight = parse_rgba("#2a2a2a");
+    let highlight_foreground = parse_rgba("#ffffff");
+
+    terminal.set_colors(Some(&foreground), Some(&background), &palette_refs);
+    terminal.set_color_cursor(Some(&cursor));
+    terminal.set_color_cursor_foreground(Some(&background));
+    terminal.set_color_highlight(Some(&highlight));
+    terminal.set_color_highlight_foreground(Some(&highlight_foreground));
 }
 
 fn present_startup_error(app: &gtk::Application, error: &str) {
@@ -1208,6 +1206,7 @@ fn build_battle_card_widgets(
         .hexpand(true)
         .vexpand(true)
         .build();
+    apply_terminal_theme(&terminal);
     terminal.set_scrollback_lines(100_000);
     terminal.connect_selection_changed(|terminal| {
         if terminal.has_selection() {
@@ -1327,6 +1326,19 @@ fn install_terminal_context_menu(
     }
     actions.add_action(&add_terminals_action);
 
+    let add_terminals_to_action =
+        gtk::gio::SimpleAction::new("add_terminals_to", Some(&u32::static_variant_type()));
+    {
+        let context = context.clone();
+        add_terminals_to_action.connect_activate(move |_, target| {
+            let Some(target_total) = target.and_then(|value| value.get::<u32>()) else {
+                return;
+            };
+            add_terminals_to(&context, source_session, target_total as usize);
+        });
+    }
+    actions.add_action(&add_terminals_to_action);
+
     let insert_terminal_number_one_action =
         gtk::gio::SimpleAction::new("insert_terminal_number_one", None);
     {
@@ -1369,22 +1381,6 @@ fn install_terminal_context_menu(
     terminal.insert_action_group("terminal", Some(&actions));
 
     let menu = gtk::gio::Menu::new();
-    menu.append(Some("Copy"), Some("terminal.copy"));
-    menu.append(Some("Paste"), Some("terminal.paste"));
-    menu.append(Some("Add Terminals"), Some("terminal.add_terminals"));
-    menu.append(
-        Some("Insert Terminal Number (1-base)"),
-        Some("terminal.insert_terminal_number_one"),
-    );
-    menu.append(
-        Some("Insert Terminal Number (0-base)"),
-        Some("terminal.insert_terminal_number_zero"),
-    );
-    let sync_inputs_item =
-        gtk::gio::MenuItem::new(Some("Synchronize Inputs"), Some("terminal.sync_inputs"));
-    sync_inputs_item.set_attribute_value("role", Some(&"check".to_variant()));
-    menu.append_item(&sync_inputs_item);
-
     let popover = gtk::PopoverMenu::from_model(Some(&menu));
     popover.set_has_arrow(false);
     popover.set_autohide(true);
@@ -1403,17 +1399,51 @@ fn install_terminal_context_menu(
         let copy_action = copy_action.clone();
         let add_terminals_action = add_terminals_action.clone();
         let sync_inputs_action = sync_inputs_action.clone();
+        let menu = menu.clone();
         let popover = popover.clone();
         right_click.connect_pressed(move |gesture, _, x, y| {
             let count = context.state.borrow().sessions().len();
+            let sync_permitted = context.state.borrow().focused_session().is_none();
             copy_action.set_enabled(terminal.has_selection());
-            add_terminals_action.set_enabled(matches!(count, 1 | 2 | 4 | 6 | 8 | 12));
+            add_terminals_action.set_enabled(matches!(count, 1 | 2 | 4 | 6 | 8 | 9 | 12));
+            sync_inputs_action.set_enabled(sync_permitted);
             sync_inputs_action.set_state(
                 &context
                     .sync_inputs_enabled
                     .load(Ordering::Relaxed)
                     .to_variant(),
             );
+            menu.remove_all();
+            menu.append(Some("Copy"), Some("terminal.copy"));
+            menu.append(Some("Paste"), Some("terminal.paste"));
+            let available_targets = reachable_terminal_targets(count);
+            if !available_targets.is_empty() {
+                let submenu = gtk::gio::Menu::new();
+                for target_total in available_targets {
+                    let item =
+                        gtk::gio::MenuItem::new(Some(&format!("Up to {target_total}")), None);
+                    item.set_action_and_target_value(
+                        Some("terminal.add_terminals_to"),
+                        Some(&(target_total as u32).to_variant()),
+                    );
+                    submenu.append_item(&item);
+                }
+                menu.append_submenu(Some("Add Terminals"), &submenu);
+            } else {
+                menu.append(Some("Add Terminals"), Some("terminal.add_terminals"));
+            }
+            menu.append(
+                Some("Insert Terminal Number (1-base)"),
+                Some("terminal.insert_terminal_number_one"),
+            );
+            menu.append(
+                Some("Insert Terminal Number (0-base)"),
+                Some("terminal.insert_terminal_number_zero"),
+            );
+            let sync_inputs_item =
+                gtk::gio::MenuItem::new(Some("Synchronize Inputs"), Some("terminal.sync_inputs"));
+            sync_inputs_item.set_attribute_value("role", Some(&"check".to_variant()));
+            menu.append_item(&sync_inputs_item);
             let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
             popover.set_pointing_to(Some(&rect));
             popover.set_offset(0, 0);
@@ -1469,7 +1499,9 @@ fn split_terminal_here(context: &Rc<AppContext>, source_session: SessionId) {
     let additions = match current_count {
         1 => 1,
         2 | 4 | 6 => 2,
-        8 | 12 => 4,
+        8 => 1,
+        9 => 3,
+        12 => 4,
         _ => 0,
     };
     if additions == 0 {
@@ -1512,6 +1544,71 @@ fn split_terminal_here(context: &Rc<AppContext>, source_session: SessionId) {
     refresh_card_styles(context);
 }
 
+fn add_terminals_to(context: &Rc<AppContext>, source_session: SessionId, target_total: usize) {
+    let current_count = context.state.borrow().sessions().len();
+    if target_total <= current_count || !supported_terminal_target(target_total) {
+        return;
+    }
+
+    if daemon_backed(context) {
+        if let Some(beachhead) = context.beachhead.as_ref() {
+            let _ = beachhead.commands().send(ClientMessage::AddTerminalsTo {
+                source_session,
+                target_total,
+            });
+        }
+        return;
+    }
+
+    let additions = target_total - current_count;
+    let cwd = context
+        .state
+        .borrow()
+        .session(source_session)
+        .and_then(|session| session.launch.cwd.clone());
+    let mut last_session = None;
+    for _ in 0..additions {
+        let number = context.state.borrow().sessions().len() + 1;
+        let mut launch = default_shell_launch(context, number);
+        if matches!(context.mode, RunMode::Local) {
+            if let Some(cwd) = cwd.clone() {
+                launch = launch.with_cwd(cwd);
+            }
+        }
+        last_session = Some(append_session_card(context, launch));
+    }
+
+    let Some(new_session) = last_session else {
+        return;
+    };
+    context.state.borrow_mut().select_session(new_session);
+    if let Some(card) = context.session_cards.borrow().get(&new_session) {
+        context.cards.select_child(&card.row);
+    }
+    refresh_runtime_and_cards(context);
+    refresh_workspace(context);
+    if context.state.borrow().focused_session().is_none()
+        && battlefield_embeds_terminal(context, new_session)
+    {
+        if let Some(card) = context.session_cards.borrow().get(&new_session) {
+            card.terminal.grab_focus();
+        }
+    }
+    refresh_card_styles(context);
+}
+
+fn supported_terminal_target(count: usize) -> bool {
+    TERMINAL_LAYOUT_TARGETS.contains(&count)
+}
+
+fn reachable_terminal_targets(count: usize) -> Vec<usize> {
+    TERMINAL_LAYOUT_TARGETS
+        .iter()
+        .copied()
+        .filter(|target| *target > count)
+        .collect()
+}
+
 fn spawn_session(
     context: &Rc<AppContext>,
     session_id: SessionId,
@@ -1552,6 +1649,7 @@ fn spawn_summary_worker() -> Option<SummaryWorker> {
             let _ = result_tx.send(SummaryResult {
                 session_id: job.session_id,
                 signature: job.signature,
+                substantive_signature: job.substantive_signature,
                 summary,
             });
         }
@@ -1580,28 +1678,6 @@ fn spawn_naming_worker() -> Option<NamingWorker> {
     });
 
     Some(NamingWorker {
-        requests: request_tx,
-        responses: result_rx,
-    })
-}
-
-fn spawn_nudge_worker() -> Option<NudgeWorker> {
-    let config = OpenAiNudgeConfig::from_env()?;
-    let (request_tx, request_rx) = mpsc::channel::<NudgeJob>();
-    let (result_tx, result_rx) = mpsc::channel::<NudgeResult>();
-
-    thread::spawn(move || {
-        while let Ok(job) = request_rx.recv() {
-            let suggestion = suggest_nudge_blocking(&config, &job.evidence);
-            let _ = result_tx.send(NudgeResult {
-                session_id: job.session_id,
-                signature: job.signature,
-                suggestion,
-            });
-        }
-    });
-
-    Some(NudgeWorker {
         requests: request_tx,
         responses: result_rx,
     })
@@ -1733,7 +1809,6 @@ fn apply_workspace_snapshot(context: &Rc<AppContext>, snapshot: WorkspaceSnapsho
                 .entry(session.record.id)
                 .or_insert_with(NudgeCacheEntry::new);
             nudge.enabled = session.auto_nudge_enabled;
-            nudge.last_nudge = session.last_nudge;
             nudge.last_sent = session
                 .last_sent_age_secs
                 .map(|age| Instant::now() - Duration::from_secs(age));
@@ -1791,6 +1866,7 @@ fn attach_daemon_display_runtime(
             runtime.output_writer.clone(),
             context.raw_input_writers.clone(),
             context.sync_inputs_enabled.clone(),
+            context.sync_inputs_permitted.clone(),
             input_events,
         );
     }
@@ -1804,7 +1880,6 @@ pub(crate) fn refresh_runtime_and_cards(context: &Rc<AppContext>) {
     drain_daemon_events(context);
     drain_summary_results(context);
     drain_naming_results(context);
-    drain_nudge_results(context);
     drain_runtime_events(context);
     update_flowbox_columns(context);
     let sessions = context.state.borrow().sessions().to_vec();
@@ -1845,37 +1920,6 @@ fn drain_naming_results(context: &Rc<AppContext>) {
                         .set_display_name(result.session_id, Some(suggestion.name));
                 }
                 entry.last_error = None;
-            }
-            Err(error) => {
-                entry.last_error = Some(error);
-            }
-        }
-    }
-}
-
-fn drain_nudge_results(context: &Rc<AppContext>) {
-    let Some(worker) = context.nudge_worker.as_ref() else {
-        return;
-    };
-
-    while let Ok(result) = worker.responses.try_recv() {
-        let mut cache = context.nudge_cache.borrow_mut();
-        let entry = cache
-            .entry(result.session_id)
-            .or_insert_with(NudgeCacheEntry::new);
-        entry.in_flight = false;
-        entry.requested_signature = None;
-        entry.last_attempt = Some(Instant::now());
-        match result.suggestion {
-            Ok(suggestion) => {
-                entry.completed_signature = Some(result.signature);
-                entry.last_error = None;
-                entry.last_nudge = (!suggestion.text.is_empty()).then_some(suggestion.text.clone());
-                if !suggestion.text.is_empty()
-                    && send_runtime_input_line(context, result.session_id, &suggestion.text).is_ok()
-                {
-                    entry.last_sent = Some(Instant::now());
-                }
             }
             Err(error) => {
                 entry.last_error = Some(error);
@@ -2019,6 +2063,7 @@ fn drain_summary_results(context: &Rc<AppContext>) {
         match result.summary {
             Ok(summary) => {
                 entry.completed_signature = Some(result.signature);
+                entry.completed_substantive_signature = Some(result.substantive_signature);
                 entry.last_summary = Some(summary);
                 entry.last_error = None;
             }
@@ -2068,7 +2113,6 @@ fn update_battle_card_widgets(context: &Rc<AppContext>, session: &SessionRecord)
     } else {
         None
     };
-    maybe_queue_nudge(context, session, observation, live_summary.as_ref());
     let chrome_mode = CardChromeMode::from_summary(live_summary.as_ref());
     if let Some(summary) = live_summary.clone() {
         card_model = apply_tactical_synthesis(card_model, summary);
@@ -2137,6 +2181,7 @@ fn maybe_queue_summary(
     };
 
     let signature = summary_signature(evidence);
+    let substantive_signature = summary_substantive_signature(evidence);
     let mut cache = context.summary_cache.borrow_mut();
     let entry = cache
         .entry(session_id)
@@ -2146,6 +2191,13 @@ fn maybe_queue_summary(
         || entry.requested_signature.as_deref() == Some(signature.as_str())
         || entry.in_flight
     {
+        return;
+    }
+    if should_skip_repeated_paused_summary(
+        entry.last_summary.as_ref(),
+        entry.completed_substantive_signature.as_deref(),
+        &substantive_signature,
+    ) {
         return;
     }
 
@@ -2163,83 +2215,9 @@ fn maybe_queue_summary(
     let _ = worker.requests.send(SummaryJob {
         session_id,
         signature,
+        substantive_signature,
         evidence: evidence.clone(),
     });
-}
-
-fn maybe_queue_nudge(
-    context: &Rc<AppContext>,
-    session: &SessionRecord,
-    observation: &SessionObservation,
-    summary: Option<&TacticalSynthesis>,
-) {
-    if daemon_backed(context) {
-        return;
-    }
-    if visual_gallery_enabled() {
-        return;
-    }
-
-    let Some(summary) = summary else {
-        return;
-    };
-    if summary.tactical_state != TacticalState::Stopped {
-        return;
-    }
-    let Some(shell_child_command) = observation.shell_child_command.as_deref() else {
-        return;
-    };
-    if !looks_like_coding_agent(shell_child_command) {
-        return;
-    }
-    let idle_seconds = observation.last_change.elapsed().as_secs();
-    if idle_seconds < 20 {
-        return;
-    }
-
-    let Some(worker) = context.nudge_worker.as_ref() else {
-        return;
-    };
-
-    let mut cache = context.nudge_cache.borrow_mut();
-    let entry = cache.entry(session.id).or_insert_with(NudgeCacheEntry::new);
-    if !entry.enabled || entry.in_flight {
-        return;
-    }
-    if entry
-        .last_sent
-        .is_some_and(|sent| sent.elapsed() < Duration::from_secs(120))
-    {
-        return;
-    }
-    if entry
-        .last_attempt
-        .is_some_and(|attempt| attempt.elapsed() < Duration::from_secs(10))
-    {
-        return;
-    }
-
-    let evidence = build_nudge_evidence(session, observation, summary);
-    let signature = nudge_signature(&evidence);
-    if entry.requested_signature.as_deref() == Some(signature.as_str()) {
-        return;
-    }
-
-    entry.in_flight = true;
-    entry.last_attempt = Some(Instant::now());
-    entry.requested_signature = Some(signature.clone());
-    let _ = worker.requests.send(NudgeJob {
-        session_id: session.id,
-        signature,
-        evidence,
-    });
-}
-
-fn looks_like_coding_agent(command: &str) -> bool {
-    matches!(
-        command,
-        "codex" | "claude" | "claude-code" | "aider" | "opencode" | "goose" | "gemini"
-    )
 }
 
 fn maybe_queue_name(context: &Rc<AppContext>, session_id: SessionId, evidence: &NamingEvidence) {
@@ -2677,14 +2655,16 @@ fn refresh_card_styles(context: &Rc<AppContext>) {
         } else {
             None
         };
-        let combined_headline = combined_focus_summary_text(
-            summary
-                .as_ref()
-                .and_then(|s| s.headline.as_deref())
-                .unwrap_or(""),
-            summary.as_ref().and_then(|s| s.attention_brief.as_deref()),
-        );
-        card.headline.set_label(&combined_headline);
+        if focus_mode {
+            let combined_headline = combined_focus_summary_text(
+                summary
+                    .as_ref()
+                    .and_then(|s| s.headline.as_deref())
+                    .unwrap_or(""),
+                summary.as_ref().and_then(|s| s.attention_brief.as_deref()),
+            );
+            card.headline.set_label(&combined_headline);
+        }
         card.headline.set_vexpand(focus_mode);
         card.headline_row.set_vexpand(focus_mode);
         card.headline_row.set_valign(if focus_mode {
@@ -2737,6 +2717,9 @@ fn refresh_card_styles(context: &Rc<AppContext>) {
 
 fn show_intervention(context: &Rc<AppContext>, session_id: SessionId) {
     context.state.borrow_mut().enter_focus_mode(session_id);
+    context
+        .sync_inputs_permitted
+        .store(false, Ordering::Relaxed);
     if let Some(card) = context.session_cards.borrow().get(&session_id) {
         context.cards.select_child(&card.row);
     }
@@ -2759,6 +2742,7 @@ fn show_intervention(context: &Rc<AppContext>, session_id: SessionId) {
 
 fn show_battlefield(context: &Rc<AppContext>) {
     context.state.borrow_mut().return_to_battlefield();
+    context.sync_inputs_permitted.store(true, Ordering::Relaxed);
     context.focus.panel.set_visible(false);
     context.content_root.remove_css_class("focus-mode");
     context.cards.set_homogeneous(true);
