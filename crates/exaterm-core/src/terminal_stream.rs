@@ -163,7 +163,19 @@ pub fn decode_chunk(
                                 index += 1;
                                 if (byte as char).is_ascii_alphabetic() || byte == b'~' {
                                     if csi_implies_rewrite(&chunk[start..index]) {
-                                        carry.clear();
+                                        // Flush carry as a completed line before clearing,
+                                        // so text written by TUIs between cursor repositions
+                                        // is captured as semantic output.
+                                        if !carry.is_empty() {
+                                            let trimmed = carry.trim_end().to_string();
+                                            if !trimmed.is_empty() {
+                                                lines.push(DecodedLine {
+                                                    text: trimmed,
+                                                    overwrite_count: *overwrite_count,
+                                                });
+                                            }
+                                            carry.clear();
+                                        }
                                         *overwrite_count += 1;
                                     }
                                     break;
@@ -505,10 +517,16 @@ mod tests {
         let lines = decode_chunk(b"alpha\x1b[2Kbeta\n", &mut carry, &mut overwrite_count);
         assert_eq!(
             lines,
-            vec![DecodedLine {
-                text: "beta".to_string(),
-                overwrite_count: 1,
-            }]
+            vec![
+                DecodedLine {
+                    text: "alpha".to_string(),
+                    overwrite_count: 0,
+                },
+                DecodedLine {
+                    text: "beta".to_string(),
+                    overwrite_count: 1,
+                },
+            ]
         );
     }
 
@@ -671,14 +689,20 @@ mod tests {
     fn erase_display_triggers_rewrite() {
         let mut carry = String::new();
         let mut overwrite_count = 0usize;
-        // ESC[2J clears the screen — text after it should start fresh.
+        // ESC[2J clears the screen — text before is flushed, text after starts fresh.
         let lines = decode_chunk(b"old stuff\x1b[2Jnew content\n", &mut carry, &mut overwrite_count);
         assert_eq!(
             lines,
-            vec![DecodedLine {
-                text: "new content".to_string(),
-                overwrite_count: 1,
-            }]
+            vec![
+                DecodedLine {
+                    text: "old stuff".to_string(),
+                    overwrite_count: 0,
+                },
+                DecodedLine {
+                    text: "new content".to_string(),
+                    overwrite_count: 1,
+                },
+            ]
         );
     }
 }
