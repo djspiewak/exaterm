@@ -23,7 +23,7 @@ pub enum RuntimeEvent {
 
 pub struct StreamRuntimeUpdate {
     pub output_bytes: Vec<u8>,
-    pub semantic_lines: Vec<String>,
+    pub semantic_lines: Vec<crate::terminal_stream::DecodedLine>,
     pub painted_line: Option<String>,
 }
 

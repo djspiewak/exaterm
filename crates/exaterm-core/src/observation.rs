@@ -52,7 +52,8 @@ impl Default for SessionObservation {
 
 pub fn apply_stream_update(observation: &mut SessionObservation, update: StreamRuntimeUpdate) {
     append_recent_lines(&mut observation.recent_lines, &update.semantic_lines);
-    append_terminal_activity(&mut observation.terminal_activity, &update.semantic_lines);
+    let text_lines: Vec<String> = update.semantic_lines.iter().map(|l| l.text.clone()).collect();
+    append_terminal_activity(&mut observation.terminal_activity, &text_lines);
     if let Some(painted_line) = update.painted_line {
         let changed = observation.painted_line.as_ref() != Some(&painted_line);
         observation.painted_line = Some(painted_line);
@@ -254,9 +255,12 @@ pub fn scrollback_fragments(observation: &SessionObservation, limit: usize) -> V
         .collect()
 }
 
-pub fn append_recent_lines(recent_lines: &mut Vec<String>, candidate_lines: &[String]) {
+pub fn append_recent_lines(
+    recent_lines: &mut Vec<String>,
+    candidate_lines: &[crate::terminal_stream::DecodedLine],
+) {
     for line in candidate_lines {
-        let trimmed = line.trim();
+        let trimmed = line.text.trim();
         if trimmed.is_empty() {
             continue;
         }
@@ -266,7 +270,15 @@ pub fn append_recent_lines(recent_lines: &mut Vec<String>, candidate_lines: &[St
         {
             continue;
         }
-        recent_lines.push(trimmed.to_string());
+        // Lines with overwrite_count > 0 came from cursor repositioning
+        // (TUI repaints). Replace the last line instead of appending so
+        // the scrollback shows the current state rather than accumulating
+        // every repaint.
+        if line.overwrite_count > 0 && !recent_lines.is_empty() {
+            *recent_lines.last_mut().unwrap() = trimmed.to_string();
+        } else {
+            recent_lines.push(trimmed.to_string());
+        }
     }
 
     const MAX_RECENT_LINES_WINDOW: usize = 24;
@@ -453,13 +465,14 @@ mod tests {
 
     #[test]
     fn recent_lines_accumulate_semantic_output_without_duplicates() {
+        use crate::terminal_stream::DecodedLine;
         let mut recent = vec!["first".to_string()];
         append_recent_lines(
             &mut recent,
             &[
-                "first".to_string(),
-                "second".to_string(),
-                "second".to_string(),
+                DecodedLine { text: "first".to_string(), overwrite_count: 0 },
+                DecodedLine { text: "second".to_string(), overwrite_count: 0 },
+                DecodedLine { text: "second".to_string(), overwrite_count: 0 },
             ],
         );
         assert_eq!(recent, vec!["first".to_string(), "second".to_string()]);
