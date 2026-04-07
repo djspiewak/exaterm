@@ -2,3 +2,5 @@
 **/*.rs.bk
 .env
 .env.*
+*.actual.png
+*.diff.png
