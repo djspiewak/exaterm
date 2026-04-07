@@ -29,7 +29,7 @@ PLIST_SRC="$REPO_ROOT/crates/exaterm-macos/resources/Info.plist"
 BINARY_SRC="$REPO_ROOT/target/$PROFILE/exaterm-macos"
 
 echo "Building exaterm-macos ($PROFILE)..."
-cargo build -p exaterm-macos "${CARGO_FLAGS[@]}"
+(cd "$REPO_ROOT" && cargo build -p exaterm-macos "${CARGO_FLAGS[@]}")
 
 if [[ ! -f "$BINARY_SRC" ]]; then
     echo "Error: binary not found at $BINARY_SRC" >&2
