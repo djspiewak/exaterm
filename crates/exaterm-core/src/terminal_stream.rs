@@ -44,16 +44,8 @@ impl StreamUpdate {
 
 impl TerminalStreamProcessor {
     pub fn ingest(&mut self, chunk: &[u8]) -> StreamUpdate {
-        // Detect alternate screen buffer transitions before parsing content.
         let was_in_alt = self.in_alternate_screen;
         self.in_alternate_screen = detect_alternate_screen(chunk, self.in_alternate_screen);
-
-        // While a full-screen TUI owns the alternate buffer, suppress both
-        // semantic lines and painted-line updates. The card scrollback
-        // freezes at the pre-TUI state and resumes when the TUI exits.
-        if self.in_alternate_screen {
-            return StreamUpdate::default();
-        }
 
         // Just exited alternate screen — clear stale parser state so the
         // partial carry from before the TUI doesn't contaminate new output.
@@ -630,29 +622,22 @@ mod tests {
     // ---- processor alternate screen integration ----
 
     #[test]
-    fn processor_suppresses_output_in_alternate_screen() {
+    fn processor_tracks_alternate_screen_state() {
         let mut proc = TerminalStreamProcessor::default();
 
-        // Normal output produces semantic lines.
         let update = proc.ingest(b"normal line\n");
         assert_eq!(update.semantic_lines, vec!["normal line"]);
         assert!(!proc.in_alternate_screen());
 
-        // Enter alternate screen — output is suppressed.
-        let update = proc.ingest(b"\x1b[?1049h");
-        assert!(update.is_empty());
+        // Enter alternate screen — state is tracked but output still flows.
+        let _ = proc.ingest(b"\x1b[?1049h");
         assert!(proc.in_alternate_screen());
 
-        // TUI output while in alternate screen produces nothing.
-        let update = proc.ingest(b"\x1b[2JScreen content\x1b[Hmore content");
-        assert!(update.is_empty());
-
-        // Exit alternate screen — normal output resumes.
-        let update = proc.ingest(b"\x1b[?1049l");
-        assert!(update.is_empty()); // The exit sequence itself has no lines.
+        // Exit alternate screen.
+        let _ = proc.ingest(b"\x1b[?1049l");
         assert!(!proc.in_alternate_screen());
 
-        // Subsequent normal output works again.
+        // Subsequent normal output works.
         let update = proc.ingest(b"back to normal\n");
         assert_eq!(update.semantic_lines, vec!["back to normal"]);
     }
