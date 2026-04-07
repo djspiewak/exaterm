@@ -1,0 +1,30 @@
+[package]
+name = "exaterm-test-util"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+appkit = ["objc2", "objc2-app-kit", "objc2-foundation"]
+
+[dependencies]
+png = "0.17"
+tempfile = "3"
+objc2 = { version = "0.6", optional = true }
+objc2-app-kit = { version = "0.3", features = [
+    "NSApplication",
+    "NSRunningApplication",
+    "NSView",
+    "NSWindow",
+    "NSBitmapImageRep",
+    "NSImageRep",
+    "NSGraphicsContext",
+    "NSColor",
+    "NSClipView",
+    "NSSplitView",
+    "NSResponder",
+], optional = true }
+objc2-foundation = { version = "0.3", features = [
+    "NSDate",
+    "NSRunLoop",
+    "NSString",
+], optional = true }

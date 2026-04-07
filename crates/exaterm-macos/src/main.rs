@@ -1,23 +1,24 @@
 #[cfg(target_os = "macos")]
 mod app_delegate;
 #[cfg(target_os = "macos")]
-mod app_state;
-#[cfg(target_os = "macos")]
-mod battlefield_view;
-#[cfg(target_os = "macos")]
-mod focus_view;
-#[cfg(target_os = "macos")]
 mod key_map;
 #[cfg(target_os = "macos")]
 mod menu;
 #[cfg(target_os = "macos")]
 mod session_io;
+
 #[cfg(target_os = "macos")]
-mod style;
+use exaterm_macos::app_state;
 #[cfg(target_os = "macos")]
-mod terminal_view;
+use exaterm_macos::battlefield_view;
 #[cfg(target_os = "macos")]
-mod window;
+use exaterm_macos::focus_view;
+#[cfg(target_os = "macos")]
+use exaterm_macos::style;
+#[cfg(target_os = "macos")]
+use exaterm_macos::terminal_view;
+#[cfg(target_os = "macos")]
+use exaterm_macos::window;
 
 #[cfg(target_os = "macos")]
 use std::cell::RefCell;

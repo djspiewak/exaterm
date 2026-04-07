@@ -3,6 +3,14 @@ name = "exaterm-macos"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "exaterm_macos"
+path = "src/lib.rs"
+
+[[bin]]
+name = "exaterm-macos"
+path = "src/main.rs"
+
 [dependencies]
 exaterm-types = { path = "../exaterm-types" }
 exaterm-core = { path = "../exaterm-core" }
@@ -55,3 +63,10 @@ objc2-app-kit = { version = "0.3", features = [
     "block2",
 ] }
 objc2-core-foundation = "0.3"
+
+[dev-dependencies]
+exaterm-test-util = { path = "../exaterm-test-util", features = ["appkit"] }
+
+[[test]]
+name = "visual_tests"
+harness = false
