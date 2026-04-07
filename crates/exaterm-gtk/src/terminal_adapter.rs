@@ -434,6 +434,7 @@ fn spawn_proxy_relay_thread(
                                 output_bytes: chunk.to_vec(),
                                 semantic_lines: update.semantic_lines,
                                 painted_line: update.painted_line,
+                                is_rewrite: update.is_rewrite,
                             }));
                         }
                     }

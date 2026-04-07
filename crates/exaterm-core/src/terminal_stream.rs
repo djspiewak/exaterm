@@ -34,6 +34,9 @@ pub struct TerminalStreamProcessor {
 pub struct StreamUpdate {
     pub semantic_lines: Vec<String>,
     pub painted_line: Option<String>,
+    /// When true, `semantic_lines` represents the current screen state and
+    /// should replace (not append to) the recent lines buffer.
+    pub is_rewrite: bool,
 }
 
 impl StreamUpdate {
@@ -73,6 +76,7 @@ impl TerminalStreamProcessor {
         StreamUpdate {
             semantic_lines,
             painted_line,
+            is_rewrite: self.in_alternate_screen,
         }
     }
 

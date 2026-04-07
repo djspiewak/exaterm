@@ -51,7 +51,11 @@ impl Default for SessionObservation {
 }
 
 pub fn apply_stream_update(observation: &mut SessionObservation, update: StreamRuntimeUpdate) {
-    append_recent_lines(&mut observation.recent_lines, &update.semantic_lines);
+    if update.is_rewrite {
+        replace_recent_lines(&mut observation.recent_lines, &update.semantic_lines);
+    } else {
+        append_recent_lines(&mut observation.recent_lines, &update.semantic_lines);
+    }
     append_terminal_activity(&mut observation.terminal_activity, &update.semantic_lines);
     if let Some(painted_line) = update.painted_line {
         let changed = observation.painted_line.as_ref() != Some(&painted_line);
@@ -252,6 +256,26 @@ pub fn scrollback_fragments(observation: &SessionObservation, limit: usize) -> V
         .into_iter()
         .rev()
         .collect()
+}
+
+/// Replace the recent lines buffer with new content (for alternate-screen TUI output).
+///
+/// Filters empty/whitespace-only lines and keeps only the last `MAX_RECENT_LINES_WINDOW` entries.
+pub fn replace_recent_lines(recent_lines: &mut Vec<String>, candidate_lines: &[String]) {
+    let new_lines: Vec<String> = candidate_lines
+        .iter()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect();
+    if new_lines.is_empty() {
+        return;
+    }
+    *recent_lines = new_lines;
+    const MAX_RECENT_LINES_WINDOW: usize = 24;
+    if recent_lines.len() > MAX_RECENT_LINES_WINDOW {
+        let extra = recent_lines.len() - MAX_RECENT_LINES_WINDOW;
+        recent_lines.drain(0..extra);
+    }
 }
 
 pub fn append_recent_lines(recent_lines: &mut Vec<String>, candidate_lines: &[String]) {

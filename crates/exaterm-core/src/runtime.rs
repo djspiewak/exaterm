@@ -25,6 +25,7 @@ pub struct StreamRuntimeUpdate {
     pub output_bytes: Vec<u8>,
     pub semantic_lines: Vec<String>,
     pub painted_line: Option<String>,
+    pub is_rewrite: bool,
 }
 
 pub struct SpawnedRuntime {
@@ -120,6 +121,7 @@ fn spawn_headless_output_thread(
                         output_bytes: chunk.to_vec(),
                         semantic_lines: update.semantic_lines,
                         painted_line: update.painted_line,
+                        is_rewrite: update.is_rewrite,
                     }));
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
