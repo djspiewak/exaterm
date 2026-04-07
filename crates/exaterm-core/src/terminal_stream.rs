@@ -34,9 +34,6 @@ pub struct TerminalStreamProcessor {
 pub struct StreamUpdate {
     pub semantic_lines: Vec<String>,
     pub painted_line: Option<String>,
-    /// When true, `semantic_lines` represents the current screen state and
-    /// should replace (not append to) the recent lines buffer.
-    pub is_rewrite: bool,
 }
 
 impl StreamUpdate {
@@ -47,8 +44,16 @@ impl StreamUpdate {
 
 impl TerminalStreamProcessor {
     pub fn ingest(&mut self, chunk: &[u8]) -> StreamUpdate {
+        // Detect alternate screen buffer transitions before parsing content.
         let was_in_alt = self.in_alternate_screen;
         self.in_alternate_screen = detect_alternate_screen(chunk, self.in_alternate_screen);
+
+        // While a full-screen TUI owns the alternate buffer, suppress both
+        // semantic lines and painted-line updates. The card scrollback
+        // freezes at the pre-TUI state and resumes when the TUI exits.
+        if self.in_alternate_screen {
+            return StreamUpdate::default();
+        }
 
         // Just exited alternate screen — clear stale parser state so the
         // partial carry from before the TUI doesn't contaminate new output.
@@ -76,7 +81,6 @@ impl TerminalStreamProcessor {
         StreamUpdate {
             semantic_lines,
             painted_line,
-            is_rewrite: self.in_alternate_screen,
         }
     }
 
@@ -167,19 +171,7 @@ pub fn decode_chunk(
                                 index += 1;
                                 if (byte as char).is_ascii_alphabetic() || byte == b'~' {
                                     if csi_implies_rewrite(&chunk[start..index]) {
-                                        // Flush carry as a completed line before clearing,
-                                        // so text written by TUIs between cursor repositions
-                                        // is captured as semantic output.
-                                        if !carry.is_empty() {
-                                            let trimmed = carry.trim_end().to_string();
-                                            if !trimmed.is_empty() {
-                                                lines.push(DecodedLine {
-                                                    text: trimmed,
-                                                    overwrite_count: *overwrite_count,
-                                                });
-                                            }
-                                            carry.clear();
-                                        }
+                                        carry.clear();
                                         *overwrite_count += 1;
                                     }
                                     break;
@@ -265,7 +257,7 @@ pub fn csi_implies_rewrite(sequence: &[u8]) -> bool {
         return false;
     };
 
-    matches!(final_byte, b'G' | b'H' | b'f' | b'J' | b'K' | b'P' | b'X')
+    matches!(final_byte, b'G' | b'H' | b'f' | b'K' | b'P' | b'X')
 }
 
 impl PaintedLineTracker {
@@ -521,16 +513,10 @@ mod tests {
         let lines = decode_chunk(b"alpha\x1b[2Kbeta\n", &mut carry, &mut overwrite_count);
         assert_eq!(
             lines,
-            vec![
-                DecodedLine {
-                    text: "alpha".to_string(),
-                    overwrite_count: 0,
-                },
-                DecodedLine {
-                    text: "beta".to_string(),
-                    overwrite_count: 1,
-                },
-            ]
+            vec![DecodedLine {
+                text: "beta".to_string(),
+                overwrite_count: 1,
+            }]
         );
     }
 
@@ -538,7 +524,6 @@ mod tests {
     fn recognizes_rewrite_like_csi_ops() {
         assert!(csi_implies_rewrite(b"2K"));
         assert!(csi_implies_rewrite(b"1G"));
-        assert!(csi_implies_rewrite(b"2J"));
         assert!(!csi_implies_rewrite(b"31m"));
     }
 
@@ -645,7 +630,7 @@ mod tests {
     // ---- processor alternate screen integration ----
 
     #[test]
-    fn processor_passes_tui_content_in_alternate_screen() {
+    fn processor_suppresses_output_in_alternate_screen() {
         let mut proc = TerminalStreamProcessor::default();
 
         // Normal output produces semantic lines.
@@ -653,20 +638,21 @@ mod tests {
         assert_eq!(update.semantic_lines, vec!["normal line"]);
         assert!(!proc.in_alternate_screen());
 
-        // Enter alternate screen.
-        let _ = proc.ingest(b"\x1b[?1049h");
+        // Enter alternate screen — output is suppressed.
+        let update = proc.ingest(b"\x1b[?1049h");
+        assert!(update.is_empty());
         assert!(proc.in_alternate_screen());
 
-        // TUI output with cursor positioning still produces semantic content
-        // via the existing decode_chunk rewrite detection.
-        let update = proc.ingest(b"\x1b[2JScreen content\n");
-        assert_eq!(update.semantic_lines, vec!["Screen content"]);
+        // TUI output while in alternate screen produces nothing.
+        let update = proc.ingest(b"\x1b[2JScreen content\x1b[Hmore content");
+        assert!(update.is_empty());
 
         // Exit alternate screen — normal output resumes.
-        let _ = proc.ingest(b"\x1b[?1049l");
+        let update = proc.ingest(b"\x1b[?1049l");
+        assert!(update.is_empty()); // The exit sequence itself has no lines.
         assert!(!proc.in_alternate_screen());
 
-        // Subsequent normal output works.
+        // Subsequent normal output works again.
         let update = proc.ingest(b"back to normal\n");
         assert_eq!(update.semantic_lines, vec!["back to normal"]);
     }
@@ -687,26 +673,5 @@ mod tests {
         // New output after TUI exit should not carry stale partial data.
         let update = proc.ingest(b"fresh line\n");
         assert_eq!(update.semantic_lines, vec!["fresh line"]);
-    }
-
-    #[test]
-    fn erase_display_triggers_rewrite() {
-        let mut carry = String::new();
-        let mut overwrite_count = 0usize;
-        // ESC[2J clears the screen — text before is flushed, text after starts fresh.
-        let lines = decode_chunk(b"old stuff\x1b[2Jnew content\n", &mut carry, &mut overwrite_count);
-        assert_eq!(
-            lines,
-            vec![
-                DecodedLine {
-                    text: "old stuff".to_string(),
-                    overwrite_count: 0,
-                },
-                DecodedLine {
-                    text: "new content".to_string(),
-                    overwrite_count: 1,
-                },
-            ]
-        );
     }
 }
