@@ -66,7 +66,8 @@ pub struct TerminalRenderState {
     pub attention_bg_colors: BTreeMap<usize, Retained<NSColor>>,
     pub nudge_colors: BTreeMap<u8, (Retained<NSColor>, Retained<NSColor>)>,
 
-    // Control chip colors: nudge discriminant -> (text, bg, border).
+    // Control chip font and colors: nudge discriminant -> (text, bg, border).
+    pub control_chip_font: Retained<NSFont>,
     pub control_chip_colors: BTreeMap<u8, (Retained<NSColor>, Retained<NSColor>, Retained<NSColor>)>,
 
     // Attention bar gradient endpoints: (left, right) for calm, watch, alert.
@@ -160,6 +161,7 @@ impl TerminalRenderState {
             nudge_colors.insert(2, (style::color_to_nscolor(&fg), style::color_to_nscolor(&bg)));
         }
 
+        let control_chip_font = style::font_from_spec(&theme::control_chip_state_font());
         let mut control_chip_colors = BTreeMap::new();
         {
             let (t, b, bd) = theme::control_off_colors();
@@ -204,6 +206,7 @@ impl TerminalRenderState {
             card_bg_colors,
             attention_bg_colors,
             nudge_colors,
+            control_chip_font,
             control_chip_colors,
             bar_calm_left: style::color_to_nscolor(&calm.top),
             bar_calm_right: style::color_to_nscolor(&calm.bottom),

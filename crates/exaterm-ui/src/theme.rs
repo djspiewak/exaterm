@@ -634,10 +634,6 @@ pub fn focus_terminal_slot_bg() -> Color {
 }
 
 // Control chips (focus rail cards)
-pub fn control_chip_label_color() -> Color {
-    Color { r: 203, g: 214, b: 226, a: 0.72 }
-}
-
 pub fn control_chip_state_font() -> FontSpec {
     FontSpec {
         size: 10.0,

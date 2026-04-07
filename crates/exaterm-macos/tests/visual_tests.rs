@@ -251,7 +251,8 @@ fn headline_text_rendered_and_positioned(mtm: MainThreadMarker) {
 }
 
 /// Render card with detail text. Assert the detail region has text.
-/// Render card without detail text. Assert detail region is empty.
+/// Render card without detail text. Assert that the card with detail
+/// has more content (text extends further down the card).
 fn detail_text_rendered_when_present(mtm: MainThreadMarker) {
     let mut card = make_card(BattleCardStatus::Active, "Test", "Headline");
     card.detail = Some("Steady progress on compilation".to_string());
@@ -261,12 +262,51 @@ fn detail_text_rendered_when_present(mtm: MainThreadMarker) {
     card_without.detail = None;
     let image_without = render_battlefield(mtm, vec![card_without], None, CARD_SIZE);
 
-    // Detail region should have text when present
+    // Detail is rendered between headline and recency. With detail, the content
+    // in the y=120-150 region is the detail text. Without detail, that region
+    // shifts up. Check that the with-detail card has bright content in a region
+    // that the without-detail card does not.
     let detail_y = 120;
-    let with_text = has_text_content(&image_with, 28, detail_y, 350, 25, 0.01);
-    let _without_text = has_text_content(&image_without, 28, detail_y, 350, 25, 0.01);
+    assert!(
+        has_text_content(&image_with, 28, detail_y, 350, 25, 0.01),
+        "detail text should be visible when present"
+    );
 
-    assert!(with_text, "detail text should be visible when present");
+    // The card with detail has more total bright content below the headline
+    // (detail + recency vs just recency). Compare bright pixel fractions in
+    // the extended content region.
+    let with_bright = bright_content_in_region(&image_with, 28, 120, 350, 60);
+    let without_bright = bright_content_in_region(&image_without, 28, 120, 350, 60);
+    assert!(
+        with_bright > without_bright,
+        "card with detail ({:.4}) should have more content than without ({:.4})",
+        with_bright,
+        without_bright,
+    );
+}
+
+/// Count bright pixel fraction in a region (helper for comparing content density).
+fn bright_content_in_region(
+    image: &exaterm_test_util::pixel_compare::RgbaImage,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+) -> f64 {
+    let mut bright = 0u64;
+    let mut total = 0u64;
+    for py in y..y.saturating_add(h).min(image.height) {
+        for px in x..x.saturating_add(w).min(image.width) {
+            if let Some(pixel) = exaterm_test_util::pixel_compare::pixel_at(image, px, py) {
+                total += 1;
+                let lum = 0.299 * (pixel[0] as f64) + 0.587 * (pixel[1] as f64) + 0.114 * (pixel[2] as f64);
+                if lum > 38.0 { // ~0.15 * 255
+                    bright += 1;
+                }
+            }
+        }
+    }
+    if total == 0 { 0.0 } else { bright as f64 / total as f64 }
 }
 
 /// Render card with alert. Assert text in alert region with "!" prefix.

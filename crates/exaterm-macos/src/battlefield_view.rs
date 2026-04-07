@@ -488,7 +488,7 @@ fn draw_control_chip(
     border_color.setStroke();
     chip_path.setLineWidth(1.0);
     chip_path.stroke();
-    let chip_str = build_simple_attr_string(label, &render.status_font, text_color);
+    let chip_str = build_simple_attr_string(label, &render.control_chip_font, text_color);
     chip_str.drawAtPoint(NSPoint::new(x + 9.0, y + 3.0));
 }
 
