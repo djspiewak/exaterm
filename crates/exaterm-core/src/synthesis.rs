@@ -313,7 +313,7 @@ impl SynthesisBackendRegistry {
         ProviderCallResult {
             provider: failed_provider,
             value: Err(last_error.expect("failed provider should have an error")),
-            demoted_provider: Some(failed_provider),
+            demoted_provider: None,
         }
     }
 }
@@ -946,13 +946,23 @@ fn run_command_with_input(
     let mut stderr_reader = child.stderr.take().map(spawn_pipe_reader);
 
     {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| format!("{label} stdin was unavailable"))?;
-        if !input.is_empty() {
-            std::io::Write::write_all(&mut stdin, input.as_bytes())
-                .map_err(|error| format!("failed to write {label} stdin: {error}"))?;
+        let stdin_result = (|| -> Result<(), String> {
+            let mut stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| format!("{label} stdin was unavailable"))?;
+            if !input.is_empty() {
+                std::io::Write::write_all(&mut stdin, input.as_bytes())
+                    .map_err(|error| format!("failed to write {label} stdin: {error}"))?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = stdin_result {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = join_pipe_reader(&mut stdout_reader, label, "stdout");
+            let _ = join_pipe_reader(&mut stderr_reader, label, "stderr");
+            return Err(error);
         }
     }
 
@@ -1022,12 +1032,16 @@ fn wait_for_child(child: &mut Child, timeout: Duration, label: &str) -> Result<E
 }
 
 fn unique_temp_path(prefix: &str, extension: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     env::temp_dir().join(format!(
-        "exaterm-{prefix}-{}-{nanos}.{extension}",
+        "exaterm-{prefix}-{}-{nanos}-{seq}.{extension}",
         std::process::id()
     ))
 }
