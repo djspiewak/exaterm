@@ -300,27 +300,31 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
 
             // Drain all PTY output every tick to prevent background buffer growth.
             let all_output = timer_ios.borrow_mut().drain_all_output();
+            // Collect stream processor results before borrowing timer_state.
+            let mut stream_updates = Vec::new();
             for (session_id, bytes) in &all_output {
                 if let Some(surface) = timer_surfaces.borrow().get(session_id) {
                     surface.bridge.feed(bytes);
                 }
-                // Feed the same bytes to a local TerminalStreamProcessor
-                // so the card scrollback updates like the GTK frontend.
                 let update = timer_processors
                     .borrow_mut()
                     .entry(*session_id)
                     .or_default()
                     .ingest(bytes);
                 if !update.semantic_lines.is_empty() {
-                    let mut state = timer_state.borrow_mut();
+                    stream_updates.push((*session_id, update.semantic_lines));
+                }
+            }
+            // Apply stream updates before the immutable borrow of timer_state.
+            if !stream_updates.is_empty() {
+                let mut state = timer_state.borrow_mut();
+                for (session_id, lines) in stream_updates {
                     exaterm_core::observation::append_recent_lines(
-                        state
-                            .recent_lines
-                            .entry(*session_id)
-                            .or_insert_with(Vec::new),
-                        &update.semantic_lines,
+                        state.recent_lines.entry(session_id).or_insert_with(Vec::new),
+                        &lines,
                     );
                 }
+                drop(state);
             }
 
             let cards = borrowed.card_render_data();
