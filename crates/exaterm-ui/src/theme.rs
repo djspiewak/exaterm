@@ -633,6 +633,57 @@ pub fn focus_terminal_slot_bg() -> Color {
     Color { r: 4, g: 8, b: 12, a: 0.94 }
 }
 
+// Control chips (focus rail cards)
+pub fn control_chip_label_color() -> Color {
+    Color { r: 203, g: 214, b: 226, a: 0.72 }
+}
+
+pub fn control_chip_state_font() -> FontSpec {
+    FontSpec {
+        size: 10.0,
+        weight: 800,
+        letter_spacing: 0.08,
+        line_height: None,
+        monospace: false,
+    }
+}
+
+/// Returns (text, background, border) for the Off control state.
+pub fn control_off_colors() -> (Color, Color, Color) {
+    (
+        Color { r: 214, g: 222, b: 230, a: 0.84 },
+        Color { r: 84, g: 97, b: 112, a: 0.18 },
+        Color { r: 163, g: 175, b: 194, a: 0.16 },
+    )
+}
+
+/// Returns (text, background, border) for the Armed control state.
+pub fn control_armed_colors() -> (Color, Color, Color) {
+    (
+        Color { r: 253, g: 230, b: 138, a: 1.0 },
+        Color { r: 120, g: 87, b: 10, a: 0.22 },
+        Color { r: 250, g: 204, b: 21, a: 0.22 },
+    )
+}
+
+/// Returns (text, background, border) for the Cooldown control state.
+pub fn control_cooldown_colors() -> (Color, Color, Color) {
+    (
+        Color { r: 147, g: 197, b: 253, a: 1.0 },
+        Color { r: 33, g: 82, b: 145, a: 0.22 },
+        Color { r: 96, g: 165, b: 250, a: 0.2 },
+    )
+}
+
+// Status bar
+pub fn status_bar_bg() -> Color {
+    Color { r: 5, g: 10, b: 18, a: 0.96 }
+}
+
+pub fn status_bar_text_color() -> Color {
+    Color { r: 196, g: 208, b: 222, a: 0.78 }
+}
+
 pub fn terminal_foreground_color() -> Color {
     Color {
         r: 204,

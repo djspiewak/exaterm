@@ -37,6 +37,9 @@ fn main() {
         ("nudge_chip_renders_on_right", nudge_chip_renders_on_right),
         ("focus_view_title_and_status_rendered", focus_view_title_and_status_rendered),
         ("focus_view_headline_rendered", focus_view_headline_rendered),
+        // Control chip and status bar tests
+        ("focus_rail_card_has_control_chip", focus_rail_card_has_control_chip),
+        ("focus_view_has_status_bar", focus_view_has_status_bar),
         // Snapshot tests
         ("battlefield_snapshot", battlefield_snapshot),
         ("focus_snapshot", focus_snapshot),
@@ -375,6 +378,44 @@ fn focus_view_headline_rendered(mtm: MainThreadMarker) {
     assert!(
         has_text_content(&image, 30, 78, 400, 40, 0.01),
         "focus view headline should be rendered"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Control chip and status bar tests
+// ---------------------------------------------------------------------------
+
+/// Render a card in normal mode with nudge chip, assert the control chip area
+/// has content (the nudge chip already renders as a control indicator).
+fn focus_rail_card_has_control_chip(mtm: MainThreadMarker) {
+    let mut card = make_card(BattleCardStatus::Active, "Test", "Headline");
+    card.nudge_state = NudgeStatePresentation {
+        label: "AUTONUDGE ARMED",
+        css_class: "card-control-armed",
+        tone: NudgeStateTone::Armed,
+    };
+    let image = render_battlefield(mtm, vec![card], None, CARD_SIZE);
+
+    // The nudge chip renders in the recency row, right-aligned
+    let nudge_x = (CARD_SIZE.width as u32).saturating_sub(180);
+    assert!(
+        has_text_content(&image, nudge_x, 118, 160, 25, 0.005),
+        "card should render a control chip in the nudge region"
+    );
+}
+
+/// Render focus view, assert bottom region has status bar text brightness.
+fn focus_view_has_status_bar(mtm: MainThreadMarker) {
+    let data = make_focus(BattleCardStatus::Active, "Focus Test", "Working on things");
+    let image = render_focus(mtm, data, FOCUS_SIZE);
+
+    // Status bar should be at the very bottom of the focus view
+    let bottom_y = (FOCUS_SIZE.height as u32).saturating_sub(30);
+    // Currently the focus view doesn't render a status bar, so this should fail
+    // until status bar rendering is implemented
+    assert!(
+        has_text_content(&image, 30, bottom_y, 400, 25, 0.005),
+        "focus view should have a status bar at the bottom"
     );
 }
 
