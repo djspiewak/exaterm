@@ -57,7 +57,7 @@ pub struct SynthesisBackendRegistry {
 
 #[derive(Debug)]
 pub struct ProviderCallResult<T> {
-    pub provider: SynthesisProvider,
+    pub provider: Option<SynthesisProvider>,
     pub value: Result<T, String>,
     pub demoted_provider: Option<SynthesisProvider>,
 }
@@ -272,7 +272,7 @@ impl SynthesisBackendRegistry {
         let providers = self.preferred_provider_order(preferences);
         let Some(_) = providers.first().copied() else {
             return ProviderCallResult {
-                provider: SynthesisProvider::OpenAi,
+                provider: None,
                 value: Err(
                     "no synthesis provider available after applying provider preferences".into(),
                 ),
@@ -286,7 +286,7 @@ impl SynthesisBackendRegistry {
             match call(provider) {
                 Ok(value) => {
                     return ProviderCallResult {
-                        provider,
+                        provider: Some(provider),
                         value: Ok(value),
                         demoted_provider: first_failed_provider,
                     };
@@ -311,7 +311,7 @@ impl SynthesisBackendRegistry {
 
         let failed_provider = first_failed_provider.expect("provider order was non-empty");
         ProviderCallResult {
-            provider: failed_provider,
+            provider: Some(failed_provider),
             value: Err(last_error.expect("failed provider should have an error")),
             demoted_provider: None,
         }
@@ -791,13 +791,17 @@ where
 
 fn strip_markdown_fences(text: &str) -> String {
     let trimmed = text.trim();
-    if let Some(stripped) = trimmed.strip_prefix("```") {
-        let stripped = stripped
+    if let Some(fence_start) = trimmed.find("```") {
+        let after_fence = &trimmed[fence_start + 3..];
+        let body = after_fence
             .lines()
             .skip_while(|line| !line.trim().is_empty() && !line.trim_start().starts_with('{'))
             .collect::<Vec<_>>()
             .join("\n");
-        return stripped.trim_end_matches("```").trim().to_string();
+        if let Some((json, _)) = body.split_once("```") {
+            return json.trim().to_string();
+        }
+        return body.trim().to_string();
     }
     trimmed.to_string()
 }
@@ -1420,6 +1424,16 @@ mod tests {
     }
 
     #[test]
+    fn parse_json_output_accepts_fenced_json_with_leading_text() {
+        let parsed = super::parse_json_output::<NameSuggestion>(
+            "Here is the result:\n```json\n{\"name\":\"Parser pass\"}\n```",
+            "fenced-leading",
+        )
+        .expect("fenced json with leading text should parse");
+        assert_eq!(parsed.name, "Parser pass");
+    }
+
+    #[test]
     fn backend_registry_prefers_openai_over_cli_fallbacks() {
         let _guard = ENV_MUTEX
             .lock()
@@ -1542,7 +1556,10 @@ mod tests {
         let old_path = std::env::var("PATH").unwrap_or_default();
         std::env::set_var("PATH", "/usr/bin:/bin");
         std::env::remove_var("OPENAI_API_KEY");
-        if super::find_executable("codex").is_none() && super::find_executable("claude").is_none() {
+        if super::find_executable("codex").is_none()
+            && super::find_executable("claude").is_none()
+            && super::find_executable("claude-code").is_none()
+        {
             assert!(SynthesisBackendRegistry::from_env().is_none());
         }
 
@@ -1579,7 +1596,7 @@ mod tests {
             calls,
             vec![SynthesisProvider::CodexCli, SynthesisProvider::ClaudeCli]
         );
-        assert_eq!(result.provider, SynthesisProvider::ClaudeCli);
+        assert_eq!(result.provider, Some(SynthesisProvider::ClaudeCli));
         assert_eq!(result.demoted_provider, Some(SynthesisProvider::CodexCli));
         assert_eq!(result.value.expect("fallback should succeed"), "ok");
     }
@@ -1617,7 +1634,7 @@ mod tests {
             calls,
             vec![SynthesisProvider::OpenAi, SynthesisProvider::CodexCli]
         );
-        assert_eq!(result.provider, SynthesisProvider::CodexCli);
+        assert_eq!(result.provider, Some(SynthesisProvider::CodexCli));
         assert_eq!(result.demoted_provider, Some(SynthesisProvider::OpenAi));
         assert_eq!(result.value.expect("fallback should succeed"), "ok");
     }
@@ -1672,7 +1689,7 @@ printf 'stdin:%s\n' "$input"
         );
 
         assert_eq!(calls, vec![SynthesisProvider::ClaudeCli]);
-        assert_eq!(result.provider, SynthesisProvider::ClaudeCli);
+        assert_eq!(result.provider, Some(SynthesisProvider::ClaudeCli));
         assert_eq!(result.demoted_provider, None);
         assert_eq!(result.value.expect("claude should run"), "ok");
     }

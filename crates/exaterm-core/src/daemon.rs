@@ -2068,7 +2068,7 @@ mod tests {
                 signature: "summary".into(),
                 substantive_signature: "summary-substantive".into(),
                 summary: ProviderCallResult {
-                    provider: crate::synthesis::SynthesisProvider::ClaudeCli,
+                    provider: Some(crate::synthesis::SynthesisProvider::ClaudeCli),
                     value: Err("openai failed".into()),
                     demoted_provider: Some(crate::synthesis::SynthesisProvider::OpenAi),
                 },
@@ -2086,7 +2086,7 @@ mod tests {
                 session_id: SessionId(2),
                 signature: "naming".into(),
                 suggestion: ProviderCallResult {
-                    provider: crate::synthesis::SynthesisProvider::ClaudeCli,
+                    provider: Some(crate::synthesis::SynthesisProvider::ClaudeCli),
                     value: Err("claude failed".into()),
                     demoted_provider: Some(crate::synthesis::SynthesisProvider::ClaudeCli),
                 },
@@ -2104,7 +2104,7 @@ mod tests {
                 session_id: SessionId(3),
                 signature: "nudge".into(),
                 suggestion: ProviderCallResult {
-                    provider: crate::synthesis::SynthesisProvider::ClaudeCli,
+                    provider: Some(crate::synthesis::SynthesisProvider::ClaudeCli),
                     value: Err("codex failed".into()),
                     demoted_provider: Some(crate::synthesis::SynthesisProvider::CodexCli),
                 },
