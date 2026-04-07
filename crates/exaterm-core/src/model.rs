@@ -184,7 +184,7 @@ fn preferred_user_shell_launch() -> (String, Vec<String>) {
         .and_then(|name| name.to_str())
         .unwrap_or("bash");
 
-    let mode = std::env::var("EXATERM_SHELL_MODE").unwrap_or_else(|_| "interactive".into());
+    let mode = std::env::var("EXATERM_SHELL_MODE").unwrap_or_else(|_| "login".into());
     let args = preferred_user_shell_args(shell_name, &mode);
 
     (shell, args)
