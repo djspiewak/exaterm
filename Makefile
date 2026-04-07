@@ -14,13 +14,13 @@ build:
 	cargo build -p exaterm-types -p exaterm-core -p exaterm-ui -p $(APP_PACKAGE) -p exatermd
 
 build-app:
-	cargo build -p $(APP_PACKAGE)
+	cargo build -p $(APP_PACKAGE) -p exatermd
 
 build-gtk:
-	cargo build -p exaterm-gtk
+	cargo build -p exaterm-gtk -p exatermd
 
 build-macos:
-	cargo build -p exaterm-macos
+	cargo build -p exaterm-macos -p exatermd
 
 run: run-app
 
