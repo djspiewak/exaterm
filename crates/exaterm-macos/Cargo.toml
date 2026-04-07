@@ -58,6 +58,7 @@ objc2-app-kit = { version = "0.3", features = [
     "NSGraphicsContext",
     "NSAttributedString",
     "NSBezierPath",
+    "NSGradient",
     "NSShadow",
     "NSStringDrawing",
     "block2",

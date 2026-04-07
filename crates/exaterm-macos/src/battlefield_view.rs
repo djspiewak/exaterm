@@ -11,7 +11,8 @@ use objc2::define_class;
 use objc2::rc::Retained;
 use objc2::{AnyThread, MainThreadOnly};
 use objc2_app_kit::{
-    NSAttributedStringNSStringDrawing, NSBezierPath, NSColor, NSEvent, NSGraphicsContext, NSView,
+    NSAttributedStringNSStringDrawing, NSBezierPath, NSColor, NSEvent, NSGraphicsContext,
+    NSShadow, NSView,
 };
 use objc2_foundation::{NSAttributedString, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 
@@ -196,13 +197,33 @@ fn draw_card(
         },
     );
 
-    // Card background — rounded rect with per-status fill.
+    // Card background — rounded rect with shadow and vertical gradient fill.
     let layer = style::card_layer_style(card.status);
     let corner = layer.corner_radius;
     let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(ns_rect, corner, corner);
 
-    render.card_bg(card.status).setFill();
-    path.fill();
+    // Draw shadow before fill.
+    {
+        let shadow_theme = exaterm_ui::theme::card_theme(card.status).shadow;
+        let shadow = NSShadow::new();
+        shadow.setShadowOffset(objc2_foundation::NSSize::new(
+            0.0,
+            -f64::from(shadow_theme.offset_y), // negative Y for flipped view
+        ));
+        shadow.setShadowBlurRadius(f64::from(shadow_theme.blur));
+        shadow.setShadowColor(Some(&style::color_to_nscolor(&shadow_theme.color)));
+        NSGraphicsContext::saveGraphicsState_class();
+        shadow.set();
+        render.card_bg_top(card.status).setFill();
+        path.fill();
+        NSGraphicsContext::restoreGraphicsState_class();
+    }
+
+    style::draw_vertical_gradient(
+        &path,
+        render.card_bg_top(card.status),
+        render.card_bg_bottom(card.status),
+    );
 
     // Card border.
     let bc = &layer.border_color;
@@ -509,11 +530,12 @@ fn draw_attention_condition_bar(
         );
         let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, 4.0, 4.0);
         if index < fill {
-            render.attention_bar_fill(fill).setFill();
+            let (left, right) = render.attention_bar_gradient(fill);
+            style::draw_horizontal_gradient(&path, left, right);
         } else {
             render.bar_empty.setFill();
+            path.fill();
         }
-        path.fill();
     }
 
     if let Some(reason) = reason {

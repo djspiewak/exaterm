@@ -9,7 +9,7 @@ use objc2_app_kit::{NSColor, NSFont};
 
 use exaterm_ui::presentation::NudgeStateTone;
 use exaterm_ui::supervision::BattleCardStatus;
-use exaterm_ui::theme::{self as theme, Color};
+use exaterm_ui::theme::{self as theme};
 
 fn ns_color(c: &NormalizedColor) -> Retained<NSColor> {
     NSColor::colorWithSRGBRed_green_blue_alpha(c.r, c.g, c.b, c.a)
@@ -59,10 +59,18 @@ pub struct TerminalRenderState {
 
     // Per-status cached colors: discriminant -> (chip_text_color, chip_bg_color).
     pub status_chip_colors: BTreeMap<u8, (Retained<NSColor>, Retained<NSColor>)>,
-    // Per-status card background: discriminant -> card background top color.
-    pub card_bg_colors: BTreeMap<u8, Retained<NSColor>>,
+    // Per-status card background: discriminant -> (top, bottom) gradient colors.
+    pub card_bg_colors: BTreeMap<u8, (Retained<NSColor>, Retained<NSColor>)>,
     pub attention_bg_colors: BTreeMap<usize, Retained<NSColor>>,
     pub nudge_colors: BTreeMap<u8, (Retained<NSColor>, Retained<NSColor>)>,
+
+    // Attention bar gradient endpoints: (left, right) for calm, watch, alert.
+    pub bar_calm_left: Retained<NSColor>,
+    pub bar_calm_right: Retained<NSColor>,
+    pub bar_watch_left: Retained<NSColor>,
+    pub bar_watch_right: Retained<NSColor>,
+    pub bar_alert_left: Retained<NSColor>,
+    pub bar_alert_right: Retained<NSColor>,
 }
 
 /// Return a `u8` discriminant for a `BattleCardStatus` variant (used as map key).
@@ -93,78 +101,18 @@ impl TerminalRenderState {
         let bar_reason_font = style::font_from_spec(&theme::bar_reason_font());
 
         // Card UI colors from theme CSS values.
-        let title_color = style::color_to_nscolor(&Color {
-            r: 248,
-            g: 250,
-            b: 252,
-            a: 1.0,
-        });
-        let headline_color = style::color_to_nscolor(&Color {
-            r: 248,
-            g: 250,
-            b: 252,
-            a: 1.0,
-        });
-        let alert_color = style::color_to_nscolor(&Color {
-            r: 202,
-            g: 214,
-            b: 227,
-            a: 0.78,
-        });
-        let recency_color = style::color_to_nscolor(&Color {
-            r: 188,
-            g: 201,
-            b: 216,
-            a: 0.88,
-        });
-        let scrollback_color = style::color_to_nscolor(&Color {
-            r: 202,
-            g: 214,
-            b: 227,
-            a: 0.88,
-        });
-        let selected_bg = style::color_to_nscolor(&Color {
-            r: 113,
-            g: 197,
-            b: 255,
-            a: 0.15,
-        });
-        let attention_chip_text = style::color_to_nscolor(&Color {
-            r: 248,
-            g: 250,
-            b: 252,
-            a: 1.0,
-        });
-        let transcript_bg = style::color_to_nscolor(&Color {
-            r: 24,
-            g: 31,
-            b: 40,
-            a: 0.52,
-        });
-        let transcript_border = style::color_to_nscolor(&Color {
-            r: 78,
-            g: 91,
-            b: 108,
-            a: 0.38,
-        });
-        let bar_caption_color = style::color_to_nscolor(&Color {
-            r: 186,
-            g: 200,
-            b: 214,
-            a: 0.62,
-        });
-        let bar_reason_color = style::color_to_nscolor(&Color {
-            r: 186,
-            g: 200,
-            b: 214,
-            a: 0.56,
-        });
-        let bar_empty = style::color_to_nscolor(&Color {
-            r: 163,
-            g: 175,
-            b: 194,
-            a: 0.14,
-        });
+        let title_color = style::color_to_nscolor(&theme::title_color());
+        let headline_color = style::color_to_nscolor(&theme::headline_color());
+        let alert_color = style::color_to_nscolor(&theme::alert_color());
+        let recency_color = style::color_to_nscolor(&theme::recency_color());
+        let scrollback_color = style::color_to_nscolor(&theme::scrollback_line_color());
+        let selected_bg = style::color_to_nscolor(&theme::selected_card_border());
+        let attention_chip_text = style::color_to_nscolor(&theme::title_color());
+        let transcript_bg = style::color_to_nscolor(&theme::transcript_bg());
+        let transcript_border = style::color_to_nscolor(&theme::transcript_border());
+        let bar_caption_color = style::color_to_nscolor(&theme::bar_caption_color());
+        let bar_reason_color = style::color_to_nscolor(&theme::bar_reason_color());
+        let bar_empty = style::color_to_nscolor(&theme::bar_empty_color());
 
         // Per-status cached colors.
         let mut status_chip_colors = BTreeMap::new();
@@ -182,104 +130,32 @@ impl TerminalRenderState {
                 ),
             );
             let layer = style::card_layer_style(status);
-            card_bg_colors.insert(disc, ns_color(&layer.background_top));
+            card_bg_colors.insert(
+                disc,
+                (ns_color(&layer.background_top), ns_color(&layer.background_bottom)),
+            );
         }
-        attention_bg_colors.insert(
-            1,
-            style::color_to_nscolor(&Color {
-                r: 17,
-                g: 88,
-                b: 51,
-                a: 0.24,
-            }),
-        );
-        attention_bg_colors.insert(
-            2,
-            style::color_to_nscolor(&Color {
-                r: 33,
-                g: 82,
-                b: 145,
-                a: 0.22,
-            }),
-        );
-        attention_bg_colors.insert(
-            3,
-            style::color_to_nscolor(&Color {
-                r: 120,
-                g: 87,
-                b: 10,
-                a: 0.22,
-            }),
-        );
-        attention_bg_colors.insert(
-            4,
-            style::color_to_nscolor(&Color {
-                r: 114,
-                g: 28,
-                b: 35,
-                a: 0.24,
-            }),
-        );
-        attention_bg_colors.insert(
-            5,
-            style::color_to_nscolor(&Color {
-                r: 130,
-                g: 35,
-                b: 35,
-                a: 0.32,
-            }),
-        );
-        nudge_colors.insert(
-            0,
-            (
-                style::color_to_nscolor(&Color {
-                    r: 214,
-                    g: 222,
-                    b: 230,
-                    a: 0.84,
-                }),
-                style::color_to_nscolor(&Color {
-                    r: 84,
-                    g: 97,
-                    b: 112,
-                    a: 0.18,
-                }),
-            ),
-        );
-        nudge_colors.insert(
-            1,
-            (
-                style::color_to_nscolor(&Color {
-                    r: 253,
-                    g: 230,
-                    b: 138,
-                    a: 1.0,
-                }),
-                style::color_to_nscolor(&Color {
-                    r: 120,
-                    g: 87,
-                    b: 10,
-                    a: 0.22,
-                }),
-            ),
-        );
-        nudge_colors.insert(
-            2,
-            (
-                style::color_to_nscolor(&Color {
-                    r: 147,
-                    g: 197,
-                    b: 253,
-                    a: 1.0,
-                }),
-                style::color_to_nscolor(&Color {
-                    r: 33,
-                    g: 82,
-                    b: 145,
-                    a: 0.22,
-                }),
-            ),
-        );
+        attention_bg_colors.insert(1, style::color_to_nscolor(&theme::attention_chip_bg(1)));
+        attention_bg_colors.insert(2, style::color_to_nscolor(&theme::attention_chip_bg(2)));
+        attention_bg_colors.insert(3, style::color_to_nscolor(&theme::attention_chip_bg(3)));
+        attention_bg_colors.insert(4, style::color_to_nscolor(&theme::attention_chip_bg(4)));
+        attention_bg_colors.insert(5, style::color_to_nscolor(&theme::attention_chip_bg(5)));
+        {
+            let (fg, bg) = theme::nudge_off_colors();
+            nudge_colors.insert(0, (style::color_to_nscolor(&fg), style::color_to_nscolor(&bg)));
+        }
+        {
+            let (fg, bg) = theme::nudge_armed_colors();
+            nudge_colors.insert(1, (style::color_to_nscolor(&fg), style::color_to_nscolor(&bg)));
+        }
+        {
+            let (fg, bg) = theme::nudge_cooldown_colors();
+            nudge_colors.insert(2, (style::color_to_nscolor(&fg), style::color_to_nscolor(&bg)));
+        }
+
+        let calm = theme::bar_calm_gradient();
+        let watch = theme::bar_watch_gradient();
+        let alert = theme::bar_alert_gradient();
 
         Self {
             title_font,
@@ -306,6 +182,12 @@ impl TerminalRenderState {
             card_bg_colors,
             attention_bg_colors,
             nudge_colors,
+            bar_calm_left: style::color_to_nscolor(&calm.top),
+            bar_calm_right: style::color_to_nscolor(&calm.bottom),
+            bar_watch_left: style::color_to_nscolor(&watch.top),
+            bar_watch_right: style::color_to_nscolor(&watch.bottom),
+            bar_alert_left: style::color_to_nscolor(&alert.top),
+            bar_alert_right: style::color_to_nscolor(&alert.bottom),
         }
     }
 
@@ -319,9 +201,14 @@ impl TerminalRenderState {
         &self.status_chip_colors[&status_discriminant(status)].1
     }
 
-    /// Look up the cached card background (top gradient) color for a given status.
-    pub fn card_bg(&self, status: BattleCardStatus) -> &Retained<NSColor> {
-        &self.card_bg_colors[&status_discriminant(status)]
+    /// Look up the cached card background top color for a given status.
+    pub fn card_bg_top(&self, status: BattleCardStatus) -> &Retained<NSColor> {
+        &self.card_bg_colors[&status_discriminant(status)].0
+    }
+
+    /// Look up the cached card background bottom color for a given status.
+    pub fn card_bg_bottom(&self, status: BattleCardStatus) -> &Retained<NSColor> {
+        &self.card_bg_colors[&status_discriminant(status)].1
     }
 
     pub fn attention_chip_bg(&self, fill: usize) -> &Retained<NSColor> {
@@ -336,8 +223,14 @@ impl TerminalRenderState {
         &self.nudge_colors[&nudge_discriminant(tone)].1
     }
 
-    pub fn attention_bar_fill(&self, fill: usize) -> &Retained<NSColor> {
-        self.attention_chip_bg(fill)
+    /// Return the (left, right) gradient colors for an attention bar segment.
+    /// Fill 1-2 → calm, 3 → watch, 4-5 → alert.
+    pub fn attention_bar_gradient(&self, fill: usize) -> (&Retained<NSColor>, &Retained<NSColor>) {
+        match fill.clamp(1, 5) {
+            1 | 2 => (&self.bar_calm_left, &self.bar_calm_right),
+            3 => (&self.bar_watch_left, &self.bar_watch_right),
+            _ => (&self.bar_alert_left, &self.bar_alert_right),
+        }
     }
 }
 

@@ -18,6 +18,7 @@ pub struct LayerStyle {
     pub corner_radius: f64,
     pub border_color: NormalizedColor,
     pub background_top: NormalizedColor,
+    pub background_bottom: NormalizedColor,
 }
 
 /// Convert a theme `Color` (u8 channels + f32 alpha) to normalized 0.0-1.0 doubles.
@@ -37,6 +38,7 @@ pub fn card_layer_style(status: BattleCardStatus) -> LayerStyle {
         corner_radius: f64::from(ct.border_radius),
         border_color: normalize_color(&ct.border_color),
         background_top: normalize_color(&ct.background.top),
+        background_bottom: normalize_color(&ct.background.bottom),
     }
 }
 
@@ -51,8 +53,9 @@ pub fn font_family(spec: &FontSpec) -> &'static str {
     }
 }
 
+use objc2::AnyThread;
 use objc2::rc::Retained;
-use objc2_app_kit::{NSColor, NSFont};
+use objc2_app_kit::{NSBezierPath, NSColor, NSFont, NSGradient};
 
 /// Map a CSS-style `FontSpec` weight to an AppKit font weight value.
 ///
@@ -91,6 +94,40 @@ pub fn color_to_nscolor(c: &Color) -> Retained<NSColor> {
         f64::from(c.b) / 255.0,
         f64::from(c.a),
     )
+}
+
+/// Draw a vertical gradient (top to bottom) within a bezier path.
+/// Falls back to a flat fill with `top_color` if gradient creation fails.
+pub fn draw_vertical_gradient(
+    path: &NSBezierPath,
+    top_color: &Retained<NSColor>,
+    bottom_color: &Retained<NSColor>,
+) {
+    if let Some(gradient) =
+        NSGradient::initWithStartingColor_endingColor(NSGradient::alloc(), top_color, bottom_color)
+    {
+        gradient.drawInBezierPath_angle(path, 270.0);
+    } else {
+        top_color.setFill();
+        path.fill();
+    }
+}
+
+/// Draw a horizontal gradient (left to right) within a bezier path.
+/// Falls back to a flat fill with `left_color` if gradient creation fails.
+pub fn draw_horizontal_gradient(
+    path: &NSBezierPath,
+    left_color: &Retained<NSColor>,
+    right_color: &Retained<NSColor>,
+) {
+    if let Some(gradient) =
+        NSGradient::initWithStartingColor_endingColor(NSGradient::alloc(), left_color, right_color)
+    {
+        gradient.drawInBezierPath_angle(path, 0.0);
+    } else {
+        left_color.setFill();
+        path.fill();
+    }
 }
 
 #[cfg(test)]

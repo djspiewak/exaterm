@@ -93,9 +93,10 @@ pub fn generate_application_css() -> String {
     parts.push(format!(
         "\
         flowboxchild.selected-card > * {{\n\
-        {i}border-color: rgba(113, 197, 255, 0.98);\n\
+        {i}border-color: {sb};\n\
         {i}box-shadow: 0 0 0 1px rgba(113, 197, 255, 0.92), 0 22px 44px rgba(13, 92, 151, 0.24);\n\
-        }}"
+        }}",
+        sb = css_color(&theme::selected_card_border()),
     ));
 
     parts.push(format!(
@@ -225,11 +226,13 @@ pub fn generate_application_css() -> String {
         "\
         .card-scrollback-band {{\n\
         {i}border-radius: 14px;\n\
-        {i}border: 1px solid rgba(173, 188, 204, 0.08);\n\
-        {i}background: rgba(8, 14, 22, 0.34);\n\
+        {i}border: 1px solid {tb};\n\
+        {i}background: {tbg};\n\
         {i}padding: 8px 10px;\n\
         {i}min-height: 0;\n\
-        }}"
+        }}",
+        tb = css_color(&theme::transcript_border()),
+        tbg = css_color(&theme::transcript_bg()),
     ));
 
     // .card-scrollback-line — uses scrollback_line_font()
@@ -237,12 +240,13 @@ pub fn generate_application_css() -> String {
     parts.push(format!(
         "\
         .card-scrollback-line {{\n\
-        {i}color: rgba(202, 214, 227, 0.88);\n\
+        {i}color: {slc};\n\
         {i}font-size: {sz}px;\n\
         {i}font-family: Monospace;\n\
         {i}line-height: 1.1;\n\
         }}",
         sz = sl_font.size as u32,
+        slc = css_color(&theme::scrollback_line_color()),
     ));
 
     parts.push(format!(
@@ -259,10 +263,11 @@ pub fn generate_application_css() -> String {
         .card-title {{\n\
         {i}font-weight: {w};\n\
         {i}font-size: {s}px;\n\
-        {i}color: #f8fafc;\n\
+        {i}color: {c};\n\
         }}",
         w = tf.weight,
         s = tf.size as u32,
+        c = css_color(&theme::title_color()),
     ));
 
     // .card-subtitle — uses card_subtitle_font()
@@ -270,11 +275,12 @@ pub fn generate_application_css() -> String {
     parts.push(format!(
         "\
         .card-subtitle {{\n\
-        {i}color: rgba(196, 208, 222, 0.66);\n\
+        {i}color: {c};\n\
         {i}font-size: {s}px;\n\
         {i}letter-spacing: {ls}em;\n\
         {i}text-transform: uppercase;\n\
         }}",
+        c = css_color(&theme::subtitle_color()),
         s = sf.size as u32,
         ls = sf.letter_spacing,
     ));
@@ -302,11 +308,12 @@ pub fn generate_application_css() -> String {
     parts.push(format!(
         "\
         .card-recency {{\n\
-        {i}color: rgba(188, 201, 216, 0.88);\n\
+        {i}color: {c};\n\
         {i}font-size: {s}px;\n\
         {i}font-weight: {w};\n\
         {i}letter-spacing: {ls}em;\n\
         }}",
+        c = css_color(&theme::recency_color()),
         s = rf.size as u32,
         w = rf.weight,
         ls = rf.letter_spacing,
@@ -317,11 +324,12 @@ pub fn generate_application_css() -> String {
     parts.push(format!(
         "\
         .card-headline {{\n\
-        {i}color: #f8fafc;\n\
+        {i}color: {c};\n\
         {i}font-weight: {w};\n\
         {i}font-size: {s}px;\n\
         {i}line-height: 1.12;\n\
         }}",
+        c = css_color(&theme::headline_color()),
         w = hf.weight,
         s = hf.size as u32,
     ));
@@ -331,11 +339,12 @@ pub fn generate_application_css() -> String {
     parts.push(format!(
         "\
         .card-detail {{\n\
-        {i}color: rgba(226, 234, 242, 0.94);\n\
+        {i}color: {c};\n\
         {i}font-size: {s}px;\n\
         {i}font-weight: {w};\n\
         {i}line-height: 1.25;\n\
         }}",
+        c = css_color(&theme::detail_color()),
         s = df.size as u32,
         w = df.weight,
     ));
@@ -345,7 +354,7 @@ pub fn generate_application_css() -> String {
     parts.push(format!(
         "\
         .card-evidence {{\n\
-        {i}color: rgba(198, 212, 227, 0.88);\n\
+        {i}color: {etc};\n\
         {i}font-size: {s}px;\n\
         {i}font-family: Monospace;\n\
         {i}background: rgba(11, 18, 28, 0.32);\n\
@@ -353,6 +362,7 @@ pub fn generate_application_css() -> String {
         {i}border: 1px solid rgba(173, 188, 204, 0.12);\n\
         {i}padding: 7px 10px;\n\
         }}",
+        etc = css_color(&theme::evidence_text_color()),
         s = ef.size as u32,
     ));
 
@@ -361,12 +371,13 @@ pub fn generate_application_css() -> String {
     parts.push(format!(
         "\
         .card-alert {{\n\
-        {i}color: rgba(202, 214, 227, 0.78);\n\
+        {i}color: {c};\n\
         {i}font-size: {s}px;\n\
         {i}font-weight: {w};\n\
         {i}line-height: 1.2;\n\
         {i}margin: 0;\n\
         }}",
+        c = css_color(&theme::alert_color()),
         s = af.size as u32,
         w = af.weight,
     ));
@@ -456,11 +467,12 @@ pub fn generate_application_css() -> String {
     parts.push(format!(
         "\
         .bar-caption {{\n\
-        {i}color: rgba(186, 200, 214, 0.62);\n\
+        {i}color: {c};\n\
         {i}font-size: {s}px;\n\
         {i}letter-spacing: {ls}em;\n\
         {i}text-transform: uppercase;\n\
         }}",
+        c = css_color(&theme::bar_caption_color()),
         s = bcf.size as u32,
         ls = bcf.letter_spacing,
     ));
@@ -483,34 +495,42 @@ pub fn generate_application_css() -> String {
     parts.push(format!(
         "\
         .bar-empty {{\n\
-        {i}background: rgba(163, 175, 194, 0.14);\n\
-        }}"
+        {i}background: {bec};\n\
+        }}",
+        bec = css_color(&theme::bar_empty_color()),
     ));
 
     parts.push(format!("\
         .bar-calm {{\n\
-        {i}background: linear-gradient(90deg, rgba(110, 231, 183, 0.88) 0%, rgba(52, 211, 153, 0.92) 100%);\n\
-        }}"));
+        {i}background: {g};\n\
+        }}",
+        g = css_gradient(90, &theme::bar_calm_gradient()),
+    ));
 
     parts.push(format!("\
         .bar-watch {{\n\
-        {i}background: linear-gradient(90deg, rgba(250, 204, 21, 0.88) 0%, rgba(251, 146, 60, 0.92) 100%);\n\
-        }}"));
+        {i}background: {g};\n\
+        }}",
+        g = css_gradient(90, &theme::bar_watch_gradient()),
+    ));
 
     parts.push(format!("\
         .bar-alert {{\n\
-        {i}background: linear-gradient(90deg, rgba(248, 113, 113, 0.9) 0%, rgba(239, 68, 68, 0.94) 100%);\n\
-        }}"));
+        {i}background: {g};\n\
+        }}",
+        g = css_gradient(90, &theme::bar_alert_gradient()),
+    ));
 
     // .bar-reason — uses bar_reason_font()
     let brf = theme::bar_reason_font();
     parts.push(format!(
         "\
         .bar-reason {{\n\
-        {i}color: rgba(186, 200, 214, 0.56);\n\
+        {i}color: {c};\n\
         {i}font-size: {s}px;\n\
         {i}line-height: 1.2;\n\
         }}",
+        c = css_color(&theme::bar_reason_color()),
         s = brf.size as u32,
     ));
 
@@ -519,10 +539,11 @@ pub fn generate_application_css() -> String {
     parts.push(format!(
         "\
         .focus-title {{\n\
-        {i}color: #f8fafc;\n\
+        {i}color: {c};\n\
         {i}font-size: {s}px;\n\
         {i}font-weight: {w};\n\
         }}",
+        c = css_color(&theme::title_color()),
         s = ftf.size as u32,
         w = ftf.weight,
     ));

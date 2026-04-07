@@ -5,13 +5,14 @@ use objc2::define_class;
 use objc2::rc::Retained;
 use objc2::{AnyThread, MainThreadOnly};
 use objc2_app_kit::{
-    NSAttributedStringNSStringDrawing, NSBezierPath, NSColor, NSGraphicsContext, NSView,
+    NSAttributedStringNSStringDrawing, NSBezierPath, NSColor, NSGraphicsContext, NSShadow, NSView,
 };
 use objc2_foundation::{NSAttributedString, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 
 use crate::app_state::FocusRenderData;
 use crate::terminal_view::TerminalRenderState;
 use exaterm_ui::layout::focus_terminal_slot_rect;
+use exaterm_ui::theme;
 use exaterm_ui::theme::Color;
 
 thread_local! {
@@ -53,7 +54,7 @@ fn draw_focus(frame: NSRect) {
         return;
     };
 
-    let bg = NSColor::colorWithSRGBRed_green_blue_alpha(0.02, 0.04, 0.07, 1.0);
+    let bg = crate::style::color_to_nscolor(&theme::focus_background());
     bg.setFill();
     NSBezierPath::fillRect(frame);
 
@@ -63,9 +64,25 @@ fn draw_focus(frame: NSRect) {
     );
     let corner = 24.0;
     let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(card_rect, corner, corner);
-    let border = NSColor::colorWithSRGBRed_green_blue_alpha(0.07, 0.18, 0.25, 1.0);
-    render.card_bg(data.status).setFill();
-    path.fill();
+    let border = crate::style::color_to_nscolor(&theme::focus_card_border());
+    // Draw shadow before fill.
+    {
+        let shadow_theme = theme::card_theme(data.status).shadow;
+        let shadow = NSShadow::new();
+        shadow.setShadowOffset(NSSize::new(0.0, -f64::from(shadow_theme.offset_y)));
+        shadow.setShadowBlurRadius(f64::from(shadow_theme.blur));
+        shadow.setShadowColor(Some(&crate::style::color_to_nscolor(&shadow_theme.color)));
+        NSGraphicsContext::saveGraphicsState_class();
+        shadow.set();
+        render.card_bg_top(data.status).setFill();
+        path.fill();
+        NSGraphicsContext::restoreGraphicsState_class();
+    }
+    crate::style::draw_vertical_gradient(
+        &path,
+        render.card_bg_top(data.status),
+        render.card_bg_bottom(data.status),
+    );
     border.setStroke();
     path.setLineWidth(1.0);
     path.stroke();
@@ -128,12 +145,7 @@ fn draw_focus(frame: NSRect) {
         NSPoint::new(slot.x, slot.y),
         NSSize::new(slot.w.max(0.0), slot.h.max(0.0)),
     );
-    let terminal_bg = ns_color(Color {
-        r: 4,
-        g: 8,
-        b: 12,
-        a: 0.94,
-    });
+    let terminal_bg = ns_color(theme::focus_terminal_slot_bg());
     terminal_bg.setFill();
     let terminal_path =
         NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(slot_rect, 18.0, 18.0);
@@ -184,11 +196,12 @@ fn draw_attention_bar(
         );
         let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, 4.0, 4.0);
         if index < fill {
-            render.attention_bar_fill(fill).setFill();
+            let (left, right) = render.attention_bar_gradient(fill);
+            crate::style::draw_horizontal_gradient(&path, left, right);
         } else {
             render.bar_empty.setFill();
+            path.fill();
         }
-        path.fill();
     }
 
     if let Some(reason) = reason {
