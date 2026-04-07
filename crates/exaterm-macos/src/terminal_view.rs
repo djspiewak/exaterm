@@ -38,6 +38,7 @@ pub struct TerminalRenderState {
     pub status_font: Retained<NSFont>,
     pub recency_font: Retained<NSFont>,
     pub headline_font: Retained<NSFont>,
+    pub detail_font: Retained<NSFont>,
     pub alert_font: Retained<NSFont>,
     pub scrollback_font: Retained<NSFont>,
     pub bar_caption_font: Retained<NSFont>,
@@ -46,6 +47,7 @@ pub struct TerminalRenderState {
     // Card UI colors (from theme CSS values).
     pub title_color: Retained<NSColor>,
     pub headline_color: Retained<NSColor>,
+    pub detail_color: Retained<NSColor>,
     pub alert_color: Retained<NSColor>,
     pub recency_color: Retained<NSColor>,
     pub scrollback_color: Retained<NSColor>,
@@ -95,6 +97,7 @@ impl TerminalRenderState {
         let status_font = style::font_from_spec(&theme::card_status_font());
         let recency_font = style::font_from_spec(&theme::card_recency_font());
         let headline_font = style::font_from_spec(&theme::card_headline_font());
+        let detail_font = style::font_from_spec(&theme::card_detail_font());
         let alert_font = style::font_from_spec(&theme::card_alert_font());
         let scrollback_font = style::font_from_spec(&theme::scrollback_line_font());
         let bar_caption_font = style::font_from_spec(&theme::bar_caption_font());
@@ -103,6 +106,7 @@ impl TerminalRenderState {
         // Card UI colors from theme CSS values.
         let title_color = style::color_to_nscolor(&theme::title_color());
         let headline_color = style::color_to_nscolor(&theme::headline_color());
+        let detail_color = style::color_to_nscolor(&theme::detail_color());
         let alert_color = style::color_to_nscolor(&theme::alert_color());
         let recency_color = style::color_to_nscolor(&theme::recency_color());
         let scrollback_color = style::color_to_nscolor(&theme::scrollback_line_color());
@@ -162,12 +166,14 @@ impl TerminalRenderState {
             status_font,
             recency_font,
             headline_font,
+            detail_font,
             alert_font,
             scrollback_font,
             bar_caption_font,
             bar_reason_font,
             title_color,
             headline_color,
+            detail_color,
             alert_color,
             recency_color,
             scrollback_color,

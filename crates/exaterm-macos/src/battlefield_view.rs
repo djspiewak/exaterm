@@ -308,12 +308,12 @@ fn draw_card(
     if let Some(ref detail) = card.detail {
         if !detail.is_empty() && !embedded_terminal {
             let detail_str =
-                build_simple_attr_string(detail, &render.alert_font, &render.alert_color);
+                build_simple_attr_string(detail, &render.detail_font, &render.detail_color);
             detail_str.drawInRect(NSRect::new(
                 NSPoint::new(rect.x + pad_x, y_cursor),
-                NSSize::new(content_width, 36.0),
+                NSSize::new(content_width, 42.0),
             ));
-            y_cursor += 28.0;
+            y_cursor += 32.0;
         }
     }
 
