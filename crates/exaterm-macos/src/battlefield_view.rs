@@ -331,10 +331,20 @@ fn draw_card(
         }
     }
 
-    // Recency.
-    let recency_str =
-        build_simple_attr_string(&card.recency, &render.recency_font, &render.recency_color);
-    if !focused_mode {
+    // Recency + control/nudge chip.
+    if focused_mode {
+        // In focused mode, draw a control chip (AUTOPILOT/MONITOR style) instead of recency.
+        draw_control_chip(
+            card.nudge_state.label,
+            card.nudge_state.tone,
+            rect.x + pad_x,
+            y_cursor,
+            render,
+        );
+        y_cursor += 26.0;
+    } else {
+        let recency_str =
+            build_simple_attr_string(&card.recency, &render.recency_font, &render.recency_color);
         recency_str.drawAtPoint(NSPoint {
             x: rect.x + pad_x,
             y: y_cursor,
@@ -460,6 +470,26 @@ fn draw_attention_chip(
         x: x + 8.0,
         y: *y_cursor + 2.0,
     });
+}
+
+fn draw_control_chip(
+    label: &str,
+    tone: NudgeStateTone,
+    x: f64,
+    y: f64,
+    render: &TerminalRenderState,
+) {
+    let (text_color, bg_color, border_color) = render.control_chip(tone);
+    let chip_w = label.len() as f64 * 6.9 + 18.0;
+    let chip_rect = NSRect::new(NSPoint::new(x, y), NSSize::new(chip_w, 22.0));
+    let chip_path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(chip_rect, 10.0, 10.0);
+    bg_color.setFill();
+    chip_path.fill();
+    border_color.setStroke();
+    chip_path.setLineWidth(1.0);
+    chip_path.stroke();
+    let chip_str = build_simple_attr_string(label, &render.status_font, text_color);
+    chip_str.drawAtPoint(NSPoint::new(x + 9.0, y + 3.0));
 }
 
 fn draw_nudge_chip(

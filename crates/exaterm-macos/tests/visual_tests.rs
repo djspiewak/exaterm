@@ -52,7 +52,6 @@ fn main() {
 
 /// Sample top-quarter vs bottom-quarter of an Active card.
 /// Top should have higher blue channel (14,33,52) than bottom (9,18,31).
-/// Currently flat fill -> FAILS.
 fn card_bg_has_vertical_gradient(mtm: MainThreadMarker) {
     let card = make_card(BattleCardStatus::Active, "Test Session", "");
     let image = render_battlefield(mtm, vec![card], None, CARD_SIZE);
@@ -82,8 +81,7 @@ fn card_bg_has_vertical_gradient(mtm: MainThreadMarker) {
     );
 }
 
-/// Sample pixels 30px below card bottom edge. Expect non-black alpha (shadow blur).
-/// Currently no shadow -> FAILS.
+/// Sample pixels below card bottom edge. Expect non-black alpha (shadow blur).
 fn card_has_shadow_below(mtm: MainThreadMarker) {
     let card1 = make_card(BattleCardStatus::Active, "Test Session", "Headline");
     let mut card2 = make_card(BattleCardStatus::Active, "Test Session 2", "Headline 2");
@@ -114,7 +112,7 @@ fn card_has_shadow_below(mtm: MainThreadMarker) {
 }
 
 /// Render card with scrollback, sample transcript region.
-/// Expect GTK's rgba(8,14,22,0.34). Current macOS uses rgba(24,31,40,0.52) -> FAILS.
+/// Expect rgba(8,14,22,0.34) from shared theme.
 fn transcript_bg_matches_theme(mtm: MainThreadMarker) {
     let mut card = make_card(BattleCardStatus::Active, "Test", "Headline");
     card.scrollback = vec!["$ cargo build".to_string(), "Compiling...".to_string()];
@@ -138,8 +136,7 @@ fn transcript_bg_matches_theme(mtm: MainThreadMarker) {
     );
 }
 
-/// Sample transcript border pixels. Expect rgba(173,188,204,0.08).
-/// Current macOS uses rgba(78,91,108,0.38) -> FAILS.
+/// Sample transcript border pixels. Expect rgba(173,188,204,0.08) from shared theme.
 fn transcript_border_matches_theme(mtm: MainThreadMarker) {
     let mut card = make_card(BattleCardStatus::Active, "Test", "Headline");
     card.scrollback = vec!["$ cargo build".to_string()];
@@ -162,8 +159,7 @@ fn transcript_border_matches_theme(mtm: MainThreadMarker) {
 }
 
 /// Render selected card, sample border region.
-/// Expect high-alpha blue glow matching GTK rgba(113,197,255,0.98).
-/// Current macOS uses alpha 0.15 -> FAILS.
+/// Expect high-alpha blue glow rgba(113,197,255,0.98) from shared theme.
 fn selected_card_border_is_bright(mtm: MainThreadMarker) {
     let card = make_card(BattleCardStatus::Active, "Test", "Headline");
     let image = render_battlefield(mtm, vec![card], Some(SessionId(1)), CARD_SIZE);
@@ -182,7 +178,7 @@ fn selected_card_border_is_bright(mtm: MainThreadMarker) {
 }
 
 /// Render card with fill=1 attention bar. Sample left vs right of segment.
-/// GTK uses horizontal gradient. macOS uses flat color -> FAILS.
+/// Verify horizontal gradient is applied.
 fn attention_bar_calm_is_gradient(mtm: MainThreadMarker) {
     let mut card = make_card(BattleCardStatus::Active, "Test", "Headline");
     card.attention_bar = Some(SegmentedBarPresentation {
@@ -385,8 +381,8 @@ fn focus_view_headline_rendered(mtm: MainThreadMarker) {
 // Control chip and status bar tests
 // ---------------------------------------------------------------------------
 
-/// Render a card in normal mode with nudge chip, assert the control chip area
-/// has content (the nudge chip already renders as a control indicator).
+/// Render a card in focused mode (rail layout). Assert the control chip renders
+/// where the recency row would be in non-focused mode.
 fn focus_rail_card_has_control_chip(mtm: MainThreadMarker) {
     let mut card = make_card(BattleCardStatus::Active, "Test", "Headline");
     card.nudge_state = NudgeStatePresentation {
@@ -394,27 +390,26 @@ fn focus_rail_card_has_control_chip(mtm: MainThreadMarker) {
         css_class: "card-control-armed",
         tone: NudgeStateTone::Armed,
     };
-    let image = render_battlefield(mtm, vec![card], None, CARD_SIZE);
+    let size = NSSize::new(400.0, 240.0);
+    let image = render_battlefield_focused(mtm, vec![card], None, size);
 
-    // The nudge chip renders in the recency row, right-aligned
-    let nudge_x = (CARD_SIZE.width as u32).saturating_sub(180);
+    // In focused mode, the control chip renders left-aligned below the headline
+    // Layout: title(20) + chip(24) + 4 + headline(28) ≈ 76
     assert!(
-        has_text_content(&image, nudge_x, 118, 160, 25, 0.005),
-        "card should render a control chip in the nudge region"
+        has_text_content(&image, 28, 72, 200, 30, 0.005),
+        "focused-mode card should render a control chip"
     );
 }
 
-/// Render focus view, assert bottom region has status bar text brightness.
+/// Render focus view, assert bottom region has status bar text.
 fn focus_view_has_status_bar(mtm: MainThreadMarker) {
     let data = make_focus(BattleCardStatus::Active, "Focus Test", "Working on things");
     let image = render_focus(mtm, data, FOCUS_SIZE);
 
-    // Status bar should be at the very bottom of the focus view
-    let bottom_y = (FOCUS_SIZE.height as u32).saturating_sub(30);
-    // Currently the focus view doesn't render a status bar, so this should fail
-    // until status bar rendering is implemented
+    // Status bar should be at the very bottom of the focus view (last 28px).
+    let bottom_y = (FOCUS_SIZE.height as u32).saturating_sub(28);
     assert!(
-        has_text_content(&image, 30, bottom_y, 400, 25, 0.005),
+        has_text_content(&image, 18, bottom_y, 400, 25, 0.005),
         "focus view should have a status bar at the bottom"
     );
 }

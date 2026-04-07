@@ -194,14 +194,17 @@ pub fn card_terminal_slot_rect(card: &CardRect) -> TerminalSlotRect {
     }
 }
 
+pub const FOCUS_STATUS_BAR_HEIGHT: f64 = 28.0;
+
 pub fn focus_terminal_slot_rect(view_w: i32, view_h: i32) -> TerminalSlotRect {
     let padding = 18.0;
     let header = 208.0;
+    let bottom = FOCUS_STATUS_BAR_HEIGHT;
     TerminalSlotRect {
         x: padding,
         y: header,
         w: (view_w as f64 - padding * 2.0).max(0.0),
-        h: (view_h as f64 - header - padding).max(0.0),
+        h: (view_h as f64 - header - bottom).max(0.0),
     }
 }
 

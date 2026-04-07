@@ -11,7 +11,7 @@ use objc2_foundation::{NSAttributedString, NSObjectProtocol, NSPoint, NSRect, NS
 
 use crate::app_state::FocusRenderData;
 use crate::terminal_view::TerminalRenderState;
-use exaterm_ui::layout::focus_terminal_slot_rect;
+use exaterm_ui::layout::{focus_terminal_slot_rect, FOCUS_STATUS_BAR_HEIGHT};
 use exaterm_ui::theme;
 use exaterm_ui::theme::Color;
 
@@ -152,6 +152,21 @@ fn draw_focus(frame: NSRect) {
     terminal_path.fill();
 
     NSGraphicsContext::restoreGraphicsState_class();
+
+    // Status bar at the very bottom of the focus view.
+    let status_bar_y = frame.size.height - FOCUS_STATUS_BAR_HEIGHT;
+    let status_bar_rect = NSRect::new(
+        NSPoint::new(0.0, status_bar_y),
+        NSSize::new(frame.size.width, FOCUS_STATUS_BAR_HEIGHT),
+    );
+    let bar_bg = crate::style::color_to_nscolor(&theme::status_bar_bg());
+    bar_bg.setFill();
+    NSBezierPath::fillRect(status_bar_rect);
+    let status_text = format!("{} — {}", data.title, data.status_label);
+    let bar_text_color = crate::style::color_to_nscolor(&theme::status_bar_text_color());
+    let bar_font = crate::style::font_from_spec(&theme::card_recency_font());
+    build_simple_attr_string(&status_text, &bar_font, &bar_text_color)
+        .drawAtPoint(NSPoint::new(18.0, status_bar_y + 6.0));
 }
 
 fn draw_chip(

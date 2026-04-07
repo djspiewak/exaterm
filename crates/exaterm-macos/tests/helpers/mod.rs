@@ -84,6 +84,32 @@ pub fn render_battlefield(
     captured.into()
 }
 
+/// Same as render_battlefield but with focused_mode=true (rail layout).
+pub fn render_battlefield_focused(
+    mtm: MainThreadMarker,
+    cards: Vec<CardRenderData>,
+    selected: Option<SessionId>,
+    size: NSSize,
+) -> RgbaImage {
+    let render = Rc::new(TerminalRenderState::new());
+    let embedded = std::collections::BTreeSet::new();
+
+    battlefield_view::set_battlefield_data(cards, selected, render, embedded, true);
+
+    let window = create_test_window(mtm, size);
+    let view: Retained<battlefield_view::BattlefieldView> = unsafe {
+        let frame = NSRect::new(NSPoint::new(0.0, 0.0), size);
+        msg_send![battlefield_view::BattlefieldView::alloc(mtm), initWithFrame: frame]
+    };
+    window.setContentView(Some(&view));
+    window.display();
+
+    exaterm_test_util::appkit_harness::flush_runloop();
+
+    let captured = capture::capture_view(&view).expect("failed to capture battlefield view");
+    captured.into()
+}
+
 /// Create an NSWindow + FocusView, set focus data, capture off-screen, return RgbaImage.
 pub fn render_focus(
     mtm: MainThreadMarker,

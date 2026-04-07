@@ -66,6 +66,9 @@ pub struct TerminalRenderState {
     pub attention_bg_colors: BTreeMap<usize, Retained<NSColor>>,
     pub nudge_colors: BTreeMap<u8, (Retained<NSColor>, Retained<NSColor>)>,
 
+    // Control chip colors: nudge discriminant -> (text, bg, border).
+    pub control_chip_colors: BTreeMap<u8, (Retained<NSColor>, Retained<NSColor>, Retained<NSColor>)>,
+
     // Attention bar gradient endpoints: (left, right) for calm, watch, alert.
     pub bar_calm_left: Retained<NSColor>,
     pub bar_calm_right: Retained<NSColor>,
@@ -157,6 +160,19 @@ impl TerminalRenderState {
             nudge_colors.insert(2, (style::color_to_nscolor(&fg), style::color_to_nscolor(&bg)));
         }
 
+        let mut control_chip_colors = BTreeMap::new();
+        {
+            let (t, b, bd) = theme::control_off_colors();
+            control_chip_colors.insert(0, (style::color_to_nscolor(&t), style::color_to_nscolor(&b), style::color_to_nscolor(&bd)));
+        }
+        {
+            let (t, b, bd) = theme::control_armed_colors();
+            control_chip_colors.insert(1, (style::color_to_nscolor(&t), style::color_to_nscolor(&b), style::color_to_nscolor(&bd)));
+        }
+        {
+            let (t, b, bd) = theme::control_cooldown_colors();
+            control_chip_colors.insert(2, (style::color_to_nscolor(&t), style::color_to_nscolor(&b), style::color_to_nscolor(&bd)));
+        }
         let calm = theme::bar_calm_gradient();
         let watch = theme::bar_watch_gradient();
         let alert = theme::bar_alert_gradient();
@@ -188,6 +204,7 @@ impl TerminalRenderState {
             card_bg_colors,
             attention_bg_colors,
             nudge_colors,
+            control_chip_colors,
             bar_calm_left: style::color_to_nscolor(&calm.top),
             bar_calm_right: style::color_to_nscolor(&calm.bottom),
             bar_watch_left: style::color_to_nscolor(&watch.top),
@@ -227,6 +244,12 @@ impl TerminalRenderState {
 
     pub fn nudge_bg_color(&self, tone: NudgeStateTone) -> &Retained<NSColor> {
         &self.nudge_colors[&nudge_discriminant(tone)].1
+    }
+
+    /// Look up the cached control chip colors (text, bg, border) for a nudge tone.
+    pub fn control_chip(&self, tone: NudgeStateTone) -> (&Retained<NSColor>, &Retained<NSColor>, &Retained<NSColor>) {
+        let entry = &self.control_chip_colors[&nudge_discriminant(tone)];
+        (&entry.0, &entry.1, &entry.2)
     }
 
     /// Return the (left, right) gradient colors for an attention bar segment.
