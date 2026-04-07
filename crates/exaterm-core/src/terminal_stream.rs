@@ -32,7 +32,7 @@ pub struct TerminalStreamProcessor {
 
 #[derive(Debug, Default)]
 pub struct StreamUpdate {
-    pub semantic_lines: Vec<DecodedLine>,
+    pub semantic_lines: Vec<String>,
     pub painted_line: Option<String>,
 }
 
@@ -55,10 +55,11 @@ impl TerminalStreamProcessor {
             self.painted_line_tracker = PaintedLineTracker::default();
         }
 
-        let semantic_lines: Vec<DecodedLine> = decode_chunk(chunk, &mut self.carry, &mut self.overwrite_count)
+        let semantic_lines = decode_chunk(chunk, &mut self.carry, &mut self.overwrite_count)
             .into_iter()
-            .filter(|line| !line.text.is_empty())
-            .collect();
+            .map(|line| line.text)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>();
 
         let painted_line = self
             .painted_line_tracker
@@ -162,15 +163,6 @@ pub fn decode_chunk(
                                 index += 1;
                                 if (byte as char).is_ascii_alphabetic() || byte == b'~' {
                                     if csi_implies_rewrite(&chunk[start..index]) {
-                                        // Flush carry as a line if it has meaningful content,
-                                        // so TUI text between cursor repositions is captured.
-                                        let trimmed = carry.trim();
-                                        if trimmed.chars().filter(|c| !c.is_whitespace()).count() >= 4 {
-                                            lines.push(DecodedLine {
-                                                text: trimmed.to_string(),
-                                                overwrite_count: *overwrite_count,
-                                            });
-                                        }
                                         carry.clear();
                                         *overwrite_count += 1;
                                     }
@@ -455,9 +447,8 @@ fn looks_consolidated_worthy(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DecodedLine, PaintConsolidator, PaintedLineTracker, StreamUpdate,
-        TerminalStreamProcessor, csi_implies_rewrite, decode_chunk, detect_alternate_screen,
-        merge_paint_lines,
+        DecodedLine, PaintConsolidator, PaintedLineTracker, TerminalStreamProcessor,
+        csi_implies_rewrite, decode_chunk, detect_alternate_screen, merge_paint_lines,
     };
     use std::time::{Duration, Instant};
 
@@ -511,29 +502,7 @@ mod tests {
     fn rewrite_like_csi_sequences_increment_overwrite_count() {
         let mut carry = String::new();
         let mut overwrite_count = 0usize;
-        // "alpha" has 5 chars (>= 4), so it gets flushed as a line before the erase.
         let lines = decode_chunk(b"alpha\x1b[2Kbeta\n", &mut carry, &mut overwrite_count);
-        assert_eq!(
-            lines,
-            vec![
-                DecodedLine {
-                    text: "alpha".to_string(),
-                    overwrite_count: 0,
-                },
-                DecodedLine {
-                    text: "beta".to_string(),
-                    overwrite_count: 1,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn rewrite_drops_short_fragments() {
-        let mut carry = String::new();
-        let mut overwrite_count = 0usize;
-        // "ab" has only 2 chars (< 4), so it gets dropped on rewrite.
-        let lines = decode_chunk(b"ab\x1b[2Kbeta\n", &mut carry, &mut overwrite_count);
         assert_eq!(
             lines,
             vec![DecodedLine {
@@ -651,10 +620,6 @@ mod tests {
         assert!(detect_alternate_screen(chunk, false));
     }
 
-    fn line_texts(update: &StreamUpdate) -> Vec<&str> {
-        update.semantic_lines.iter().map(|l| l.text.as_str()).collect()
-    }
-
     // ---- processor alternate screen integration ----
 
     #[test]
@@ -662,7 +627,7 @@ mod tests {
         let mut proc = TerminalStreamProcessor::default();
 
         let update = proc.ingest(b"normal line\n");
-        assert_eq!(line_texts(&update), vec!["normal line"]);
+        assert_eq!(update.semantic_lines, vec!["normal line"]);
         assert!(!proc.in_alternate_screen());
 
         // Enter alternate screen — state is tracked but output still flows.
@@ -675,7 +640,7 @@ mod tests {
 
         // Subsequent normal output works.
         let update = proc.ingest(b"back to normal\n");
-        assert_eq!(line_texts(&update), vec!["back to normal"]);
+        assert_eq!(update.semantic_lines, vec!["back to normal"]);
     }
 
     #[test]
@@ -693,29 +658,6 @@ mod tests {
 
         // New output after TUI exit should not carry stale partial data.
         let update = proc.ingest(b"fresh line\n");
-        assert_eq!(line_texts(&update), vec!["fresh line"]);
-    }
-
-    #[test]
-    fn overwrite_lines_replace_last_recent_line() {
-        use crate::observation::append_recent_lines;
-        let mut recent = vec!["prompt".to_string()];
-        append_recent_lines(&mut recent, &[
-            DecodedLine { text: "status: working".to_string(), overwrite_count: 1 },
-        ]);
-        // Should replace "prompt", not append.
-        assert_eq!(recent, vec!["status: working"]);
-
-        // A second overwrite replaces again.
-        append_recent_lines(&mut recent, &[
-            DecodedLine { text: "status: done".to_string(), overwrite_count: 1 },
-        ]);
-        assert_eq!(recent, vec!["status: done"]);
-
-        // A non-overwrite line appends normally.
-        append_recent_lines(&mut recent, &[
-            DecodedLine { text: "new output".to_string(), overwrite_count: 0 },
-        ]);
-        assert_eq!(recent, vec!["status: done", "new output"]);
+        assert_eq!(update.semantic_lines, vec!["fresh line"]);
     }
 }
