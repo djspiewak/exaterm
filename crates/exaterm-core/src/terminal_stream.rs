@@ -25,6 +25,7 @@ pub struct PaintConsolidator {
 pub struct TerminalStreamProcessor {
     carry: String,
     overwrite_count: usize,
+    in_alternate_screen: bool,
     painted_line_tracker: PaintedLineTracker,
     paint_consolidator: PaintConsolidator,
 }
@@ -43,6 +44,25 @@ impl StreamUpdate {
 
 impl TerminalStreamProcessor {
     pub fn ingest(&mut self, chunk: &[u8]) -> StreamUpdate {
+        // Detect alternate screen buffer transitions before parsing content.
+        let was_in_alt = self.in_alternate_screen;
+        self.in_alternate_screen = detect_alternate_screen(chunk, self.in_alternate_screen);
+
+        // While a full-screen TUI owns the alternate buffer, suppress both
+        // semantic lines and painted-line updates. The card scrollback
+        // freezes at the pre-TUI state and resumes when the TUI exits.
+        if self.in_alternate_screen {
+            return StreamUpdate::default();
+        }
+
+        // Just exited alternate screen — clear stale parser state so the
+        // partial carry from before the TUI doesn't contaminate new output.
+        if was_in_alt && !self.in_alternate_screen {
+            self.carry.clear();
+            self.overwrite_count = 0;
+            self.painted_line_tracker = PaintedLineTracker::default();
+        }
+
         let semantic_lines = decode_chunk(chunk, &mut self.carry, &mut self.overwrite_count)
             .into_iter()
             .map(|line| line.text)
@@ -63,6 +83,61 @@ impl TerminalStreamProcessor {
             painted_line,
         }
     }
+
+    /// Whether the processor believes the terminal is in alternate screen mode.
+    pub fn in_alternate_screen(&self) -> bool {
+        self.in_alternate_screen
+    }
+}
+
+/// Scan a chunk for DEC Private Mode sequences that switch the alternate screen buffer.
+///
+/// Recognized sequences:
+/// - `ESC [ ? 1049 h` — switch to alternate screen (smcup)
+/// - `ESC [ ? 1049 l` — switch to primary screen (rmcup)
+/// - `ESC [ ? 47 h` / `ESC [ ? 47 l` — older alternate screen variant
+/// - `ESC [ ? 1047 h` / `ESC [ ? 1047 l` — another variant
+///
+/// Returns the updated alternate-screen state. The last transition in the chunk wins.
+fn detect_alternate_screen(chunk: &[u8], mut in_alt: bool) -> bool {
+    let mut i = 0;
+    while i < chunk.len() {
+        if chunk[i] == 0x1b && i + 1 < chunk.len() && chunk[i + 1] == b'[' {
+            i += 2; // skip ESC [
+            if i < chunk.len() && chunk[i] == b'?' {
+                i += 1; // skip ?
+                // Parse numeric parameter.
+                let num_start = i;
+                while i < chunk.len() && chunk[i].is_ascii_digit() {
+                    i += 1;
+                }
+                if i > num_start && i < chunk.len() {
+                    let param = &chunk[num_start..i];
+                    let final_byte = chunk[i];
+                    i += 1;
+                    if param == b"1049" || param == b"47" || param == b"1047" {
+                        match final_byte {
+                            b'h' => in_alt = true,
+                            b'l' => in_alt = false,
+                            _ => {}
+                        }
+                    }
+                }
+            } else {
+                // Skip non-private CSI sequence.
+                while i < chunk.len() {
+                    let byte = chunk[i];
+                    i += 1;
+                    if (byte as char).is_ascii_alphabetic() || byte == b'~' {
+                        break;
+                    }
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    in_alt
 }
 
 pub fn decode_chunk(
@@ -380,8 +455,8 @@ fn looks_consolidated_worthy(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DecodedLine, PaintConsolidator, PaintedLineTracker, csi_implies_rewrite, decode_chunk,
-        merge_paint_lines,
+        DecodedLine, PaintConsolidator, PaintedLineTracker, TerminalStreamProcessor,
+        csi_implies_rewrite, decode_chunk, detect_alternate_screen, merge_paint_lines,
     };
     use std::time::{Duration, Instant};
 
@@ -504,5 +579,99 @@ mod tests {
             .maybe_emit_at(now + Duration::from_millis(250))
             .expect("sentence snapshot should emit");
         assert_eq!(painted, "Reviewing the current repository state first");
+    }
+
+    // ---- alternate screen detection ----
+
+    #[test]
+    fn detect_alternate_screen_smcup() {
+        // ESC [ ? 1049 h enters alternate screen.
+        assert!(detect_alternate_screen(b"\x1b[?1049h", false));
+    }
+
+    #[test]
+    fn detect_alternate_screen_rmcup() {
+        // ESC [ ? 1049 l exits alternate screen.
+        assert!(!detect_alternate_screen(b"\x1b[?1049l", true));
+    }
+
+    #[test]
+    fn detect_alternate_screen_ignores_unrelated_sequences() {
+        // ESC [ ? 25 h (show cursor) should not change state.
+        assert!(!detect_alternate_screen(b"\x1b[?25h", false));
+        assert!(detect_alternate_screen(b"\x1b[?25h", true));
+    }
+
+    #[test]
+    fn detect_alternate_screen_variant_47() {
+        assert!(detect_alternate_screen(b"\x1b[?47h", false));
+        assert!(!detect_alternate_screen(b"\x1b[?47l", true));
+    }
+
+    #[test]
+    fn detect_alternate_screen_variant_1047() {
+        assert!(detect_alternate_screen(b"\x1b[?1047h", false));
+        assert!(!detect_alternate_screen(b"\x1b[?1047l", true));
+    }
+
+    #[test]
+    fn detect_alternate_screen_last_transition_wins() {
+        // Both enter and exit in one chunk — last one wins.
+        assert!(!detect_alternate_screen(b"\x1b[?1049h\x1b[?1049l", false));
+        assert!(detect_alternate_screen(b"\x1b[?1049l\x1b[?1049h", true));
+    }
+
+    #[test]
+    fn detect_alternate_screen_mixed_with_normal_output() {
+        let chunk = b"hello\r\n\x1b[?1049hworld";
+        assert!(detect_alternate_screen(chunk, false));
+    }
+
+    // ---- processor alternate screen integration ----
+
+    #[test]
+    fn processor_suppresses_output_in_alternate_screen() {
+        let mut proc = TerminalStreamProcessor::default();
+
+        // Normal output produces semantic lines.
+        let update = proc.ingest(b"normal line\n");
+        assert_eq!(update.semantic_lines, vec!["normal line"]);
+        assert!(!proc.in_alternate_screen());
+
+        // Enter alternate screen — output is suppressed.
+        let update = proc.ingest(b"\x1b[?1049h");
+        assert!(update.is_empty());
+        assert!(proc.in_alternate_screen());
+
+        // TUI output while in alternate screen produces nothing.
+        let update = proc.ingest(b"\x1b[2JScreen content\x1b[Hmore content");
+        assert!(update.is_empty());
+
+        // Exit alternate screen — normal output resumes.
+        let update = proc.ingest(b"\x1b[?1049l");
+        assert!(update.is_empty()); // The exit sequence itself has no lines.
+        assert!(!proc.in_alternate_screen());
+
+        // Subsequent normal output works again.
+        let update = proc.ingest(b"back to normal\n");
+        assert_eq!(update.semantic_lines, vec!["back to normal"]);
+    }
+
+    #[test]
+    fn processor_clears_carry_on_alternate_screen_exit() {
+        let mut proc = TerminalStreamProcessor::default();
+
+        // Start some partial output.
+        let _ = proc.ingest(b"partial");
+
+        // Enter alternate screen — TUI runs.
+        let _ = proc.ingest(b"\x1b[?1049h");
+
+        // Exit alternate screen.
+        let _ = proc.ingest(b"\x1b[?1049l");
+
+        // New output after TUI exit should not carry stale partial data.
+        let update = proc.ingest(b"fresh line\n");
+        assert_eq!(update.semantic_lines, vec!["fresh line"]);
     }
 }
