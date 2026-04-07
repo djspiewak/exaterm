@@ -344,7 +344,9 @@ mod tests {
         let _ = font_from_spec(&exaterm_ui::theme::card_status_font());
         let _ = font_from_spec(&exaterm_ui::theme::card_recency_font());
         let _ = font_from_spec(&exaterm_ui::theme::card_headline_font());
+        let _ = font_from_spec(&exaterm_ui::theme::card_detail_font());
         let _ = font_from_spec(&exaterm_ui::theme::card_alert_font());
+        let _ = font_from_spec(&exaterm_ui::theme::control_chip_state_font());
     }
 
     // ---- color_to_nscolor ----
