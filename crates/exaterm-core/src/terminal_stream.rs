@@ -163,6 +163,15 @@ pub fn decode_chunk(
                                 index += 1;
                                 if (byte as char).is_ascii_alphabetic() || byte == b'~' {
                                     if csi_implies_rewrite(&chunk[start..index]) {
+                                        // Flush carry as a line if it has meaningful content,
+                                        // so TUI text between cursor repositions is captured.
+                                        let trimmed = carry.trim();
+                                        if trimmed.chars().filter(|c| !c.is_whitespace()).count() >= 4 {
+                                            lines.push(DecodedLine {
+                                                text: trimmed.to_string(),
+                                                overwrite_count: *overwrite_count,
+                                            });
+                                        }
                                         carry.clear();
                                         *overwrite_count += 1;
                                     }
@@ -249,7 +258,7 @@ pub fn csi_implies_rewrite(sequence: &[u8]) -> bool {
         return false;
     };
 
-    matches!(final_byte, b'G' | b'H' | b'f' | b'K' | b'P' | b'X')
+    matches!(final_byte, b'G' | b'H' | b'f' | b'J' | b'K' | b'P' | b'X')
 }
 
 impl PaintedLineTracker {
@@ -502,7 +511,29 @@ mod tests {
     fn rewrite_like_csi_sequences_increment_overwrite_count() {
         let mut carry = String::new();
         let mut overwrite_count = 0usize;
+        // "alpha" has 5 chars (>= 4), so it gets flushed as a line before the erase.
         let lines = decode_chunk(b"alpha\x1b[2Kbeta\n", &mut carry, &mut overwrite_count);
+        assert_eq!(
+            lines,
+            vec![
+                DecodedLine {
+                    text: "alpha".to_string(),
+                    overwrite_count: 0,
+                },
+                DecodedLine {
+                    text: "beta".to_string(),
+                    overwrite_count: 1,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn rewrite_drops_short_fragments() {
+        let mut carry = String::new();
+        let mut overwrite_count = 0usize;
+        // "ab" has only 2 chars (< 4), so it gets dropped on rewrite.
+        let lines = decode_chunk(b"ab\x1b[2Kbeta\n", &mut carry, &mut overwrite_count);
         assert_eq!(
             lines,
             vec![DecodedLine {
@@ -516,6 +547,7 @@ mod tests {
     fn recognizes_rewrite_like_csi_ops() {
         assert!(csi_implies_rewrite(b"2K"));
         assert!(csi_implies_rewrite(b"1G"));
+        assert!(csi_implies_rewrite(b"2J"));
         assert!(!csi_implies_rewrite(b"31m"));
     }
 
