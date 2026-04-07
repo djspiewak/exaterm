@@ -75,7 +75,6 @@ pub struct AppState {
     pub workspace: WorkspaceViewState,
     pub observations: BTreeMap<SessionId, ObservedActivity>,
     pub recent_lines: BTreeMap<SessionId, Vec<String>>,
-    pub painted_lines: BTreeMap<SessionId, String>,
     pub raw_socket_names: BTreeMap<SessionId, String>,
     pub summaries: BTreeMap<SessionId, TacticalSynthesis>,
     pub auto_nudge_enabled: BTreeMap<SessionId, bool>,
@@ -89,7 +88,6 @@ impl AppState {
             workspace: WorkspaceViewState::new(),
             observations: BTreeMap::new(),
             recent_lines: BTreeMap::new(),
-            painted_lines: BTreeMap::new(),
             raw_socket_names: BTreeMap::new(),
             summaries: BTreeMap::new(),
             auto_nudge_enabled: BTreeMap::new(),
@@ -111,16 +109,10 @@ impl AppState {
             obs.idle_seconds = Some(snap_obs.last_change_age_secs);
         }
 
-        // Store recent terminal output lines and painted line for card scrollback.
+        // Store recent terminal output lines for card scrollback.
         for session in &snapshot.sessions {
             self.recent_lines
                 .insert(session.record.id, session.observation.recent_lines.clone());
-            if let Some(ref painted) = session.observation.painted_line {
-                self.painted_lines
-                    .insert(session.record.id, painted.clone());
-            } else {
-                self.painted_lines.remove(&session.record.id);
-            }
         }
 
         // Track raw stream socket names for each session.
@@ -162,7 +154,6 @@ impl AppState {
         let session_ids: Vec<_> = snapshot.sessions.iter().map(|s| s.record.id).collect();
         self.observations.retain(|id, _| session_ids.contains(id));
         self.recent_lines.retain(|id, _| session_ids.contains(id));
-        self.painted_lines.retain(|id, _| session_ids.contains(id));
         self.raw_socket_names
             .retain(|id, _| session_ids.contains(id));
         self.summaries.retain(|id, _| session_ids.contains(id));
@@ -189,7 +180,7 @@ impl AppState {
                     .cloned()
                     .unwrap_or_default();
                 let card = build_battle_card(session, &observed);
-                let mut scrollback: Vec<String> = self
+                let scrollback = self
                     .recent_lines
                     .get(&session.id)
                     .map(|lines| {
@@ -203,16 +194,6 @@ impl AppState {
                         taken.into_iter().rev().collect()
                     })
                     .unwrap_or_default();
-                // Append the painted line (TUI status) when available, so the
-                // card scrollback reflects current TUI state rather than going stale.
-                if let Some(painted) = self.painted_lines.get(&session.id) {
-                    let trimmed = painted.trim();
-                    if !trimmed.is_empty()
-                        && scrollback.last().map(|s| s.as_str()) != Some(trimmed)
-                    {
-                        scrollback.push(trimmed.to_string());
-                    }
-                }
                 let title = session
                     .display_name
                     .as_deref()

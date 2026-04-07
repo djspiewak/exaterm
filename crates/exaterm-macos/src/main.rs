@@ -225,11 +225,17 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
         TerminalSurface,
     >::new()));
 
+    let stream_processors = Rc::new(RefCell::new(BTreeMap::<
+        exaterm_types::model::SessionId,
+        exaterm_core::terminal_stream::TerminalStreamProcessor,
+    >::new()));
+
     let timer_beachhead = Rc::clone(&beachhead);
     let displayed_focus = Rc::new(RefCell::new(None::<exaterm_types::model::SessionId>));
 
     let timer_displayed_focus = Rc::clone(&displayed_focus);
     let timer_surfaces = Rc::clone(&terminal_surfaces);
+    let timer_processors = Rc::clone(&stream_processors);
     let timer_sync_inputs = sync_inputs_enabled.clone();
     let timer_block = block2::StackBlock::new(
         move |_timer: std::ptr::NonNull<objc2_foundation::NSTimer>| {
@@ -297,6 +303,23 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
             for (session_id, bytes) in &all_output {
                 if let Some(surface) = timer_surfaces.borrow().get(session_id) {
                     surface.bridge.feed(bytes);
+                }
+                // Feed the same bytes to a local TerminalStreamProcessor
+                // so the card scrollback updates like the GTK frontend.
+                let update = timer_processors
+                    .borrow_mut()
+                    .entry(*session_id)
+                    .or_default()
+                    .ingest(bytes);
+                if !update.semantic_lines.is_empty() {
+                    let mut state = timer_state.borrow_mut();
+                    exaterm_core::observation::append_recent_lines(
+                        state
+                            .recent_lines
+                            .entry(*session_id)
+                            .or_insert_with(Vec::new),
+                        &update.semantic_lines,
+                    );
                 }
             }
 
