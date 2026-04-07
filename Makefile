@@ -25,12 +25,15 @@ build-macos:
 run: run-app
 
 run-app: build-app
+	-@pkill -f 'exaterm.*--beachhead-daemon' 2>/dev/null; true
 	cargo run -p $(APP_PACKAGE)
 
 run-gtk: build-gtk
+	-@pkill -f 'exaterm.*--beachhead-daemon' 2>/dev/null; true
 	cargo run -p exaterm-gtk
 
 run-macos: build-macos
+	-@pkill -f 'exaterm.*--beachhead-daemon' 2>/dev/null; true
 	cargo run -p exaterm-macos
 
 daemon:
