@@ -506,6 +506,14 @@ struct TerminalSurface {
 }
 
 #[cfg(target_os = "macos")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TerminalPlacement {
+    Hidden,
+    Focused(NSRect),
+    Embedded(NSRect),
+}
+
+#[cfg(target_os = "macos")]
 fn terminal_appearance() -> exaterm_swiftterm::TerminalAppearance {
     let terminal_font = exaterm_ui::theme::terminal_font();
     exaterm_swiftterm::TerminalAppearance {
@@ -602,39 +610,108 @@ fn apply_terminal_layout(
     embedded_ids: &BTreeSet<exaterm_types::model::SessionId>,
     focused: Option<exaterm_types::model::SessionId>,
 ) {
+    let focus_panel_size = focus_panel.frame().size;
     for (session_id, surface) in surfaces {
-        surface.view.removeFromSuperview();
-        surface.view.setHidden(true);
+        let placement = terminal_placement_for_session(
+            *session_id,
+            focus_panel_size.width as i32,
+            focus_panel_size.height as i32,
+            cards,
+            rects,
+            embedded_ids,
+            focused,
+        );
+        apply_terminal_surface_placement(surface, battlefield_view, focus_panel, placement);
+    }
+}
 
-        if focused == Some(*session_id) {
-            let slot = exaterm_ui::layout::focus_terminal_slot_rect(
-                focus_panel.frame().size.width as i32,
-                focus_panel.frame().size.height as i32,
-            );
-            focus_panel.addSubview(&surface.view);
-            surface.view.setFrame(NSRect::new(
+#[cfg(target_os = "macos")]
+fn terminal_placement_for_session(
+    session_id: exaterm_types::model::SessionId,
+    focus_panel_width: i32,
+    focus_panel_height: i32,
+    cards: &[app_state::CardRenderData],
+    rects: &[exaterm_ui::layout::CardRect],
+    embedded_ids: &BTreeSet<exaterm_types::model::SessionId>,
+    focused: Option<exaterm_types::model::SessionId>,
+) -> TerminalPlacement {
+    if focused == Some(session_id) {
+        let slot = exaterm_ui::layout::focus_terminal_slot_rect(focus_panel_width, focus_panel_height);
+        return TerminalPlacement::Focused(NSRect::new(
+            NSPoint::new(slot.x, slot.y),
+            NSSize::new(slot.w, slot.h),
+        ));
+    }
+
+    if embedded_ids.contains(&session_id) {
+        if let Some((_, rect)) = cards
+            .iter()
+            .zip(rects.iter())
+            .find(|(card, _)| card.id == session_id)
+        {
+            let slot = exaterm_ui::layout::card_terminal_slot_rect(rect);
+            return TerminalPlacement::Embedded(NSRect::new(
                 NSPoint::new(slot.x, slot.y),
                 NSSize::new(slot.w, slot.h),
             ));
-            surface.view.setHidden(false);
-            continue;
         }
+    }
 
-        if embedded_ids.contains(session_id) {
-            if let Some((_, rect)) = cards
-                .iter()
-                .zip(rects.iter())
-                .find(|(card, _)| card.id == *session_id)
-            {
-                let slot = exaterm_ui::layout::card_terminal_slot_rect(rect);
-                battlefield_view.addSubview(&surface.view);
-                surface.view.setFrame(NSRect::new(
-                    NSPoint::new(slot.x, slot.y),
-                    NSSize::new(slot.w, slot.h),
-                ));
+    TerminalPlacement::Hidden
+}
+
+#[cfg(target_os = "macos")]
+fn apply_terminal_surface_placement(
+    surface: &TerminalSurface,
+    battlefield_view: &battlefield_view::BattlefieldView,
+    focus_panel: &focus_view::FocusView,
+    placement: TerminalPlacement,
+) {
+    match placement {
+        TerminalPlacement::Hidden => {
+            if unsafe { surface.view.superview() }.is_some() {
+                surface.view.removeFromSuperview();
+            }
+            if !surface.view.isHidden() {
+                surface.view.setHidden(true);
+            }
+        }
+        TerminalPlacement::Focused(frame) => {
+            ensure_view_parent(&surface.view, focus_panel);
+            update_view_frame(&surface.view, frame);
+            if surface.view.isHidden() {
                 surface.view.setHidden(false);
             }
         }
+        TerminalPlacement::Embedded(frame) => {
+            ensure_view_parent(&surface.view, battlefield_view);
+            update_view_frame(&surface.view, frame);
+            if surface.view.isHidden() {
+                surface.view.setHidden(false);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_view_parent(view: &objc2_app_kit::NSView, target: &objc2_app_kit::NSView) {
+    if unsafe { view.superview() }
+        .as_deref()
+        .is_some_and(|parent| std::ptr::eq(parent, target))
+    {
+        return;
+    }
+
+    if unsafe { view.superview() }.is_some() {
+        view.removeFromSuperview();
+    }
+    target.addSubview(view);
+}
+
+#[cfg(target_os = "macos")]
+fn update_view_frame(view: &objc2_app_kit::NSView, frame: NSRect) {
+    if view.frame() != frame {
+        view.setFrame(frame);
     }
 }
 
@@ -650,4 +727,146 @@ fn present_startup_error(mtm: objc2::MainThreadMarker, error: &str) {
     alert.setMessageText(&message);
     alert.setInformativeText(&info);
     alert.runModal();
+}
+
+#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::TerminalPlacement;
+    use super::terminal_placement_for_session;
+    use exaterm_macos::app_state::CardRenderData;
+    use exaterm_ui::layout::{CardRect, card_terminal_slot_rect};
+    use exaterm_ui::presentation::nudge_state_presentation;
+    use exaterm_ui::supervision::BattleCardStatus;
+    use exaterm_types::model::SessionId;
+    use objc2_foundation::{NSPoint, NSRect, NSSize};
+    use std::collections::BTreeSet;
+
+    fn test_card(id: SessionId) -> CardRenderData {
+        CardRenderData {
+            id,
+            title: "session".into(),
+            status: BattleCardStatus::Active,
+            status_label: "ACTIVE".into(),
+            recency: "now".into(),
+            scrollback: Vec::new(),
+            headline: String::new(),
+            combined_headline: String::new(),
+            detail: None,
+            alert: None,
+            attention: None,
+            attention_reason: None,
+            attention_bar: None,
+            attention_bar_reason: None,
+            nudge_state: nudge_state_presentation(false, false, false),
+            last_nudge: None,
+        }
+    }
+
+    #[test]
+    fn terminal_placement_equality_is_variant_sensitive() {
+        let frame = NSRect::new(NSPoint::new(1.0, 2.0), NSSize::new(3.0, 4.0));
+        assert_eq!(TerminalPlacement::Hidden, TerminalPlacement::Hidden);
+        assert_eq!(
+            TerminalPlacement::Focused(frame),
+            TerminalPlacement::Focused(frame)
+        );
+        assert_eq!(
+            TerminalPlacement::Embedded(frame),
+            TerminalPlacement::Embedded(frame)
+        );
+        assert_ne!(TerminalPlacement::Hidden, TerminalPlacement::Focused(frame));
+        assert_ne!(
+            TerminalPlacement::Focused(frame),
+            TerminalPlacement::Embedded(frame)
+        );
+    }
+
+    #[test]
+    fn placement_is_hidden_when_session_is_not_visible() {
+        let cards = vec![test_card(SessionId(1))];
+        let rects = vec![CardRect {
+            x: 12.0,
+            y: 12.0,
+            w: 640.0,
+            h: 480.0,
+        }];
+
+        let placement = terminal_placement_for_session(
+            SessionId(2),
+            1200,
+            700,
+            &cards,
+            &rects,
+            &BTreeSet::from([SessionId(1)]),
+            None,
+        );
+
+        assert_eq!(placement, TerminalPlacement::Hidden);
+    }
+
+    #[test]
+    fn placement_uses_focus_slot_for_focused_session() {
+        let placement = terminal_placement_for_session(
+            SessionId(1),
+            1200,
+            700,
+            &[],
+            &[],
+            &BTreeSet::new(),
+            Some(SessionId(1)),
+        );
+
+        match placement {
+            TerminalPlacement::Focused(frame) => {
+                assert!(frame.size.width > 0.0);
+                assert!(frame.size.height > 0.0);
+            }
+            other => panic!("expected focused placement, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn placement_uses_card_slot_for_embedded_session() {
+        let card = CardRect {
+            x: 12.0,
+            y: 12.0,
+            w: 700.0,
+            h: 520.0,
+        };
+        let expected = card_terminal_slot_rect(&card);
+
+        let placement = terminal_placement_for_session(
+            SessionId(1),
+            1200,
+            700,
+            &[test_card(SessionId(1))],
+            &[card],
+            &BTreeSet::from([SessionId(1)]),
+            None,
+        );
+
+        assert_eq!(
+            placement,
+            TerminalPlacement::Embedded(NSRect::new(
+                NSPoint::new(expected.x, expected.y),
+                NSSize::new(expected.w, expected.h),
+            ))
+        );
+    }
+
+    #[test]
+    fn placement_is_hidden_when_embedded_session_has_no_card_rect() {
+        let placement = terminal_placement_for_session(
+            SessionId(1),
+            1200,
+            700,
+            &[test_card(SessionId(1))],
+            &[],
+            &BTreeSet::from([SessionId(1)]),
+            None,
+        );
+
+        assert_eq!(placement, TerminalPlacement::Hidden);
+    }
 }
