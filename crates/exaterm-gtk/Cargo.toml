@@ -3,6 +3,10 @@ name = "exaterm-gtk"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "exaterm_gtk"
+path = "src/lib.rs"
+
 [dependencies]
 exaterm-types = { path = "../exaterm-types" }
 exaterm-core = { path = "../exaterm-core" }
@@ -14,6 +18,7 @@ serde_json = "1"
 [target.'cfg(target_os = "linux")'.dependencies]
 gio = "0.21"
 glib = "0.21"
+glasscheck = { path = "../../../glasscheck/crates/glasscheck", features = ["gtk"] }
 gtk = { package = "gtk4", version = "0.10", features = ["v4_20"] }
 libc = "0.2"
 libadwaita = { version = "0.8.0", features = ["gtk_v4_20", "v1_8"] }

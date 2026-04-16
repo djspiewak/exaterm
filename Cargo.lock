@@ -194,6 +194,7 @@ dependencies = [
  "exaterm-types",
  "exaterm-ui",
  "gio",
+ "glasscheck",
  "glib",
  "gtk4",
  "libadwaita",
@@ -260,6 +261,16 @@ version = "0.1.0"
 dependencies = [
  "exaterm-core",
  "exaterm-types",
+]
+
+[[package]]
+name = "exaterm-ui-tests"
+version = "0.1.0"
+dependencies = [
+ "exaterm-gtk",
+ "exaterm-test-util",
+ "exaterm-ui",
+ "glasscheck",
 ]
 
 [[package]]
@@ -534,6 +545,41 @@ dependencies = [
  "libc",
  "system-deps",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "glasscheck"
+version = "0.1.0"
+dependencies = [
+ "glasscheck-appkit",
+ "glasscheck-core",
+ "glasscheck-gtk",
+]
+
+[[package]]
+name = "glasscheck-appkit"
+version = "0.1.0"
+dependencies = [
+ "glasscheck-core",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+]
+
+[[package]]
+name = "glasscheck-core"
+version = "0.1.0"
+dependencies = [
+ "png",
+]
+
+[[package]]
+name = "glasscheck-gtk"
+version = "0.1.0"
+dependencies = [
+ "glasscheck-core",
+ "glib",
+ "gtk4",
 ]
 
 [[package]]

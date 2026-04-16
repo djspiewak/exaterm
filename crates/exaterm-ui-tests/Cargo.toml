@@ -1,0 +1,19 @@
+[package]
+name = "exaterm-ui-tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+exaterm-ui = { path = "../exaterm-ui" }
+exaterm-test-util = { path = "../exaterm-test-util" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+exaterm-gtk = { path = "../exaterm-gtk" }
+glasscheck = { path = "../../../glasscheck/crates/glasscheck", features = ["gtk"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+glasscheck = { path = "../../../glasscheck/crates/glasscheck", features = ["appkit"] }
+
+[[test]]
+name = "ui_glasscheck"
+harness = false

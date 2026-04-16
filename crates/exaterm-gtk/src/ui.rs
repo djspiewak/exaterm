@@ -219,15 +219,15 @@ pub(crate) struct AppContext {
     pub(crate) beachhead: Option<BeachheadConnection>,
     pub(crate) state: Rc<RefCell<WorkspaceViewState>>,
     title: adw::WindowTitle,
-    empty_state: gtk::Box,
-    content_root: gtk::Box,
-    cards: gtk::FlowBox,
-    battlefield_panel: gtk::ScrolledWindow,
+    pub(crate) empty_state: gtk::Box,
+    pub(crate) content_root: gtk::Box,
+    pub(crate) cards: gtk::FlowBox,
+    pub(crate) battlefield_panel: gtk::ScrolledWindow,
     pub(crate) sync_inputs_enabled: Arc<AtomicBool>,
     pub(crate) sync_inputs_permitted: Arc<AtomicBool>,
     pub(crate) raw_input_writers: Arc<Mutex<BTreeMap<SessionId, Arc<Mutex<UnixStream>>>>>,
-    focus: FocusWidgets,
-    session_cards: RefCell<BTreeMap<SessionId, SessionCardWidgets>>,
+    pub(crate) focus: FocusWidgets,
+    pub(crate) session_cards: RefCell<BTreeMap<SessionId, SessionCardWidgets>>,
     observations: RefCell<BTreeMap<SessionId, SessionObservation>>,
     raw_stream_socket_names: RefCell<BTreeMap<SessionId, String>>,
     pub(crate) runtimes: RefCell<BTreeMap<SessionId, SessionRuntime>>,
@@ -238,6 +238,14 @@ pub(crate) struct AppContext {
     naming_cache: RefCell<BTreeMap<SessionId, NamingCacheEntry>>,
     pub(crate) nudge_cache: RefCell<BTreeMap<SessionId, NudgeCacheEntry>>,
     closing_confirmed: Cell<bool>,
+}
+
+pub(crate) struct BuiltTestUi {
+    pub(crate) window: adw::ApplicationWindow,
+    pub(crate) body: gtk::Box,
+    pub(crate) context: Rc<AppContext>,
+    pub(crate) empty_title: gtk::Label,
+    pub(crate) empty_body: gtk::Label,
 }
 
 pub fn run() -> glib::ExitCode {
@@ -699,6 +707,269 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
     }
 
     window.present();
+}
+
+pub(crate) fn build_test_ui(app: &gtk::Application, mode: RunMode) -> BuiltTestUi {
+    load_css();
+    configure_app_icons(APP_ID);
+
+    let cards = gtk::FlowBox::builder()
+        .selection_mode(gtk::SelectionMode::Single)
+        .column_spacing(12)
+        .row_spacing(12)
+        .margin_top(12)
+        .margin_bottom(12)
+        .margin_start(12)
+        .margin_end(12)
+        .homogeneous(true)
+        .valign(gtk::Align::Fill)
+        .build();
+
+    let battlefield_panel = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Never)
+        .hexpand(true)
+        .vexpand(true)
+        .child(&cards)
+        .build();
+
+    let empty_title = gtk::Label::builder()
+        .label("No Live Sessions Yet")
+        .xalign(0.5)
+        .css_classes(vec!["empty-title".to_string()])
+        .build();
+    let empty_body = gtk::Label::builder()
+        .label("Use Add Shell to start a real terminal-native agent or open an operator shell. Exaterm opens into an empty battlefield so the workspace begins with your own sessions.")
+        .xalign(0.5)
+        .justify(gtk::Justification::Center)
+        .wrap(true)
+        .css_classes(vec!["empty-body".to_string()])
+        .max_width_chars(68)
+        .build();
+    let empty_state = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(10)
+        .hexpand(true)
+        .vexpand(true)
+        .valign(gtk::Align::Center)
+        .halign(gtk::Align::Center)
+        .visible(false)
+        .build();
+    empty_state.add_css_class("empty-state");
+    empty_state.append(&empty_title);
+    empty_state.append(&empty_body);
+
+    let focus_title = gtk::Label::builder()
+        .xalign(0.0)
+        .css_classes(vec!["card-title".to_string()])
+        .build();
+    focus_title.set_single_line_mode(true);
+    focus_title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    focus_title.set_max_width_chars(18);
+    let focus_status = gtk::Label::builder()
+        .xalign(0.5)
+        .css_classes(vec!["card-status".to_string(), "battle-active".to_string()])
+        .label("Active")
+        .build();
+    let focus_headline = gtk::Label::builder()
+        .xalign(0.0)
+        .wrap(true)
+        .hexpand(true)
+        .visible(false)
+        .css_classes(vec![
+            "card-headline".to_string(),
+            "focus-headline".to_string(),
+        ])
+        .build();
+    focus_headline.set_lines(2);
+    focus_headline.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    focus_headline.set_max_width_chars(30);
+    let focus_attention_pill = gtk::Label::builder()
+        .xalign(0.0)
+        .visible(false)
+        .css_classes(vec!["focus-attention-pill".to_string()])
+        .build();
+    focus_attention_pill.set_valign(gtk::Align::End);
+    let focus_alert = gtk::Label::builder()
+        .xalign(0.0)
+        .wrap(true)
+        .hexpand(true)
+        .css_classes(vec!["card-alert".to_string()])
+        .build();
+    focus_alert.set_halign(gtk::Align::Fill);
+    focus_alert.set_single_line_mode(true);
+    focus_alert.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    let focus_terminal_slot = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    focus_terminal_slot.add_css_class("card-terminal-slot");
+    let focus_momentum_bar = build_segmented_bar("Attention Condition");
+    let focus_risk_bar = build_segmented_bar("Unused");
+
+    let focus_header_left = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(0)
+        .hexpand(true)
+        .build();
+    focus_header_left.add_css_class("card-title-stack");
+    focus_header_left.append(&focus_title);
+
+    let focus_header_right = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(0)
+        .halign(gtk::Align::End)
+        .valign(gtk::Align::Start)
+        .build();
+    focus_header_right.add_css_class("card-status-stack");
+    focus_header_right.append(&focus_status);
+
+    let focus_header = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .build();
+    focus_header.add_css_class("card-header-row");
+    focus_header.append(&focus_header_left);
+    focus_header.append(&focus_header_right);
+
+    let focus_bars = gtk::Box::builder()
+        .orientation(gtk::Orientation::Horizontal)
+        .spacing(8)
+        .hexpand(true)
+        .build();
+    focus_bars.add_css_class("card-bars-row");
+    focus_bars.set_homogeneous(true);
+    focus_bars.append(&focus_momentum_bar.frame);
+    focus_bars.append(&focus_risk_bar.frame);
+
+    let focus_summary_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .hexpand(true)
+        .vexpand(true)
+        .visible(false)
+        .build();
+    focus_summary_box.add_css_class("focus-summary-box");
+    focus_summary_box.append(&focus_headline);
+    focus_summary_box.append(&focus_attention_pill);
+
+    let focus_content = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(8)
+        .margin_top(16)
+        .margin_bottom(16)
+        .margin_start(16)
+        .margin_end(16)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    focus_content.append(&focus_header);
+    focus_content.append(&focus_summary_box);
+    focus_content.append(&focus_alert);
+    focus_content.append(&focus_terminal_slot);
+    focus_content.append(&focus_bars);
+
+    let focus_frame = gtk::Frame::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .child(&focus_content)
+        .build();
+    focus_frame.add_css_class("battle-card");
+    focus_frame.add_css_class("single-card");
+
+    let focus_panel = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(10)
+        .margin_top(8)
+        .margin_bottom(18)
+        .margin_start(18)
+        .margin_end(18)
+        .hexpand(true)
+        .vexpand(true)
+        .visible(false)
+        .build();
+    focus_panel.add_css_class("focus-panel");
+    focus_panel.append(&focus_frame);
+
+    let title = adw::WindowTitle::new("Exaterm", "");
+    let header = adw::HeaderBar::builder()
+        .title_widget(&title)
+        .show_end_title_buttons(true)
+        .build();
+
+    let content_root = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    content_root.add_css_class("battlefield-root");
+    content_root.append(&empty_state);
+    content_root.append(&battlefield_panel);
+    content_root.append(&focus_panel);
+
+    let body = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    body.append(&header);
+    body.append(&content_root);
+
+    let window = adw::ApplicationWindow::builder()
+        .application(app)
+        .title("Exaterm")
+        .icon_name(APP_ID)
+        .default_width(1480)
+        .default_height(960)
+        .content(&body)
+        .build();
+
+    let context = Rc::new(AppContext {
+        mode,
+        beachhead: None,
+        state: Rc::new(RefCell::new(WorkspaceViewState::new())),
+        title,
+        empty_state,
+        content_root,
+        cards,
+        battlefield_panel,
+        sync_inputs_enabled: Arc::new(AtomicBool::new(false)),
+        sync_inputs_permitted: Arc::new(AtomicBool::new(true)),
+        raw_input_writers: Arc::new(Mutex::new(BTreeMap::new())),
+        focus: FocusWidgets {
+            panel: focus_panel,
+            frame: focus_frame,
+            header: focus_header,
+            title: focus_title,
+            status: focus_status,
+            summary_box: focus_summary_box,
+            headline: focus_headline,
+            attention_pill: focus_attention_pill,
+            alert: focus_alert,
+            terminal_slot: focus_terminal_slot,
+            bars: focus_bars,
+            momentum_bar: focus_momentum_bar,
+            risk_bar: focus_risk_bar,
+        },
+        session_cards: RefCell::new(BTreeMap::new()),
+        observations: RefCell::new(BTreeMap::new()),
+        raw_stream_socket_names: RefCell::new(BTreeMap::new()),
+        runtimes: RefCell::new(BTreeMap::new()),
+        display_runtimes: RefCell::new(BTreeMap::new()),
+        summary_worker: None,
+        summary_cache: RefCell::new(BTreeMap::new()),
+        naming_worker: None,
+        naming_cache: RefCell::new(BTreeMap::new()),
+        nudge_cache: RefCell::new(BTreeMap::new()),
+        closing_confirmed: Cell::new(false),
+    });
+
+    BuiltTestUi {
+        window,
+        body,
+        context,
+        empty_title,
+        empty_body,
+    }
 }
 
 fn parse_rgba(hex: &str) -> gdk::RGBA {
@@ -1166,23 +1437,7 @@ fn build_battle_card_widgets(
         let click = gtk::GestureClick::new();
         click.set_button(1);
         click.connect_released(move |_, _, _, _| {
-            let focused_before = context.state.borrow().focused_session();
-            context.cards.select_child(&row);
-            context.state.borrow_mut().select_session(session_id);
-            if let Some(focused_session) = focused_before {
-                if focused_session == session_id {
-                    show_battlefield(&context);
-                }
-                return;
-            }
-            if battlefield_embeds_terminal(&context, session_id) {
-                if let Some(card) = context.session_cards.borrow().get(&session_id) {
-                    card.terminal.grab_focus();
-                }
-                refresh_card_styles(&context);
-            } else {
-                show_intervention(&context, session_id);
-            }
+            activate_battlefield_card(&context, &row, session_id);
         });
         frame.add_controller(click);
     }
@@ -1700,7 +1955,7 @@ fn drain_daemon_events(context: &Rc<AppContext>) {
     }
 }
 
-fn apply_workspace_snapshot(context: &Rc<AppContext>, snapshot: WorkspaceSnapshot) {
+pub(crate) fn apply_workspace_snapshot(context: &Rc<AppContext>, snapshot: WorkspaceSnapshot) {
     let session_ids = snapshot
         .sessions
         .iter()
@@ -2596,7 +2851,7 @@ fn apply_attention_pill(pill: &gtk::Label, summary: Option<&TacticalSynthesis>) 
     pill.set_visible(true);
 }
 
-fn refresh_workspace(context: &Rc<AppContext>) {
+pub(crate) fn refresh_workspace(context: &Rc<AppContext>) {
     let sessions = context.state.borrow().sessions().to_vec();
     let mut idle = 0usize;
     let mut active = 0usize;
@@ -2633,7 +2888,7 @@ fn refresh_workspace(context: &Rc<AppContext>) {
     context.title.set_subtitle("");
 }
 
-fn refresh_card_styles(context: &Rc<AppContext>) {
+pub(crate) fn refresh_card_styles(context: &Rc<AppContext>) {
     const FOCUS_RAIL_CARD_WIDTH: i32 = 168;
 
     let selected = context.state.borrow().selected_session();
@@ -2755,6 +3010,30 @@ fn refresh_card_styles(context: &Rc<AppContext>) {
                 card.frame.add_css_class("single-card");
             }
         }
+    }
+}
+
+pub(crate) fn activate_battlefield_card(
+    context: &Rc<AppContext>,
+    row: &gtk::FlowBoxChild,
+    session_id: SessionId,
+) {
+    let focused_before = context.state.borrow().focused_session();
+    context.cards.select_child(row);
+    context.state.borrow_mut().select_session(session_id);
+    if let Some(focused_session) = focused_before {
+        if focused_session == session_id {
+            show_battlefield(context);
+        }
+        return;
+    }
+    if battlefield_embeds_terminal(context, session_id) {
+        if let Some(card) = context.session_cards.borrow().get(&session_id) {
+            card.terminal.grab_focus();
+        }
+        refresh_card_styles(context);
+    } else {
+        show_intervention(context, session_id);
     }
 }
 
