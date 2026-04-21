@@ -406,6 +406,16 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
                 if let Some(surface) = timer_surfaces.borrow().get(&session_id) {
                     battlefield_window.makeFirstResponder(Some(&*surface.view));
                 }
+            } else if let Some(selected_id) = selected {
+                // In embedded battlefield mode the selected terminal should receive
+                // keyboard input directly. Set it as first responder so the user
+                // doesn't need an initial click — mirrors what BattlefieldInteraction
+                // does on mouse click, but runs on startup before any click occurs.
+                if embedded_ids.contains(&selected_id) {
+                    if let Some(surface) = timer_surfaces.borrow().get(&selected_id) {
+                        battlefield_window.makeFirstResponder(Some(&*surface.view));
+                    }
+                }
             }
         },
     );
@@ -529,9 +539,21 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
         )
     };
 
-    // Show the window.
-    main_window.makeKeyAndOrderFront(None);
-    app.activate();
+    // Defer window show and activation into applicationDidFinishLaunching so they are
+    // delivered while the run loop is processing events. Calling these before app.run()
+    // can leave the activation undelivered, meaning the window appears but keyboard focus
+    // stays in the launching terminal until the user clicks.
+    let launch_window = main_window.clone();
+    app_delegate::set_launch_handler(move || {
+        let mtm = MainThreadMarker::new().expect("main thread");
+        // activateIgnoringOtherApps(true) forces the app to the front regardless of
+        // which app is currently active. The newer activate() API explicitly provides
+        // "no guarantee that the app will be activated at all" — it requires the
+        // current frontmost app to cooperate, which a terminal launching us will not.
+        #[allow(deprecated)]
+        NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+        launch_window.makeKeyAndOrderFront(None);
+    });
 
     // Keep everything alive for the lifetime of the app.
     std::mem::forget(main_window);

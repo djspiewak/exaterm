@@ -21,6 +21,15 @@ thread_local! {
     static SELECTED_AUTO_NUDGE: RefCell<bool> = const { RefCell::new(false) };
     static HAS_SESSIONS: RefCell<bool> = const { RefCell::new(false) };
     static SYNC_INPUTS: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
+    static LAUNCH_HANDLER: RefCell<Option<Box<dyn Fn()>>> = RefCell::new(None);
+}
+
+/// Register a closure to be called from `applicationDidFinishLaunching`.
+/// Use this to show and activate the main window so that the activation is
+/// delivered while the run loop is already processing events, ensuring the
+/// app reliably steals keyboard focus from the launching terminal.
+pub fn set_launch_handler(f: impl Fn() + 'static) {
+    LAUNCH_HANDLER.with(|h| *h.borrow_mut() = Some(Box::new(f)));
 }
 
 /// Store the command sender so the AppDelegate can send messages to the daemon.
@@ -134,6 +143,18 @@ define_class!(
     unsafe impl NSApplicationDelegate for AppDelegate {}
 
     impl AppDelegate {
+        #[unsafe(method(applicationDidFinishLaunching:))]
+        fn application_did_finish_launching(
+            &self,
+            _notification: &objc2_foundation::NSNotification,
+        ) {
+            LAUNCH_HANDLER.with(|h| {
+                if let Some(handler) = h.borrow().as_ref() {
+                    handler();
+                }
+            });
+        }
+
         #[unsafe(method(newShell:))]
         fn _new_shell(&self, _sender: Option<&NSObject>) {
             send_add_terminals();
