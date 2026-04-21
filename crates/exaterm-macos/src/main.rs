@@ -480,7 +480,6 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
                         if let Some(surface) = key_surfaces.borrow().get(&session_id) {
                             if key_code == 36 {
                                 key_window.makeFirstResponder(Some(&*surface.view));
-                                return std::ptr::null_mut();
                             }
                             return event.as_ptr();
                         }
