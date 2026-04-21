@@ -22,6 +22,8 @@ use exaterm_macos::terminal_view;
 #[cfg(target_os = "macos")]
 use exaterm_macos::window;
 #[cfg(target_os = "macos")]
+use exaterm_macos::key_dispatch;
+#[cfg(target_os = "macos")]
 use exaterm_macos::workspace_support;
 
 #[cfg(target_os = "macos")]
@@ -481,7 +483,10 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
                             if key_code == 36 {
                                 key_window.makeFirstResponder(Some(&*surface.view));
                             }
-                            return event.as_ptr();
+                            return match key_dispatch::embedded_terminal_key_action(key_code) {
+                                key_dispatch::KeyAction::PassThrough => event.as_ptr(),
+                                key_dispatch::KeyAction::Consume => std::ptr::null_mut(),
+                            };
                         }
                     }
                 }

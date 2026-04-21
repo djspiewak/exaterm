@@ -1,6 +1,8 @@
 #[cfg(target_os = "macos")]
 pub mod app_state;
 #[cfg(target_os = "macos")]
+pub mod key_dispatch;
+#[cfg(target_os = "macos")]
 pub mod battlefield_view;
 #[cfg(target_os = "macos")]
 pub mod empty_state_view;

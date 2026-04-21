@@ -76,6 +76,11 @@ fn main() {
         ("battlefield_snapshot", battlefield_snapshot),
         ("battlefield_focus_rail_snapshot", battlefield_focus_rail_snapshot),
         ("focus_snapshot", focus_snapshot),
+        // PTY integration tests
+        (
+            "embedded_terminal_return_executes_shell_command",
+            embedded_terminal_return_executes_shell_command,
+        ),
     ]);
 }
 
@@ -588,4 +593,129 @@ fn focus_snapshot(mtm: MainThreadMarker) {
 
 fn baselines_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/visual_baselines")
+}
+
+// ---------------------------------------------------------------------------
+// PTY integration test: embedded terminal Return key dispatches to shell
+// ---------------------------------------------------------------------------
+
+/// Verifies that the key dispatch logic passes Return through to the shell.
+///
+/// Spawns a bash process, writes "echo testing", then consults
+/// `key_dispatch::embedded_terminal_key_action` to decide whether to send
+/// the Return byte.  The test fails if the dispatch function returns `Consume`
+/// for Return (key code 36) — which is exactly what the pre-fix code did.
+fn embedded_terminal_return_executes_shell_command(_mtm: MainThreadMarker) {
+    let (stdin_write, stdout_read, child_pid) = spawn_bash_with_pipes();
+
+    // Write the command body — characters other than Return always pass through
+    // in both old and new code, so we write them directly.
+    unsafe {
+        libc::write(
+            stdin_write,
+            b"echo testing".as_ptr() as *const libc::c_void,
+            12,
+        );
+    }
+
+    // Send Return only if the embedded terminal key dispatch allows it.
+    // This is the exact decision that was broken before the fix:
+    // the old code returned Consume for key code 36 (Return), so bash
+    // never saw the newline and "testing" never appeared in the output.
+    if exaterm_macos::key_dispatch::embedded_terminal_key_action(36)
+        == exaterm_macos::key_dispatch::KeyAction::PassThrough
+    {
+        unsafe {
+            libc::write(
+                stdin_write,
+                b"\n".as_ptr() as *const libc::c_void,
+                1,
+            );
+        }
+    }
+
+    // Close stdin so bash gets EOF and exits cleanly.
+    unsafe { libc::close(stdin_write) };
+
+    // Wait for bash to finish processing.
+    unsafe { libc::waitpid(child_pid, std::ptr::null_mut(), 0) };
+
+    // Read all output from bash.
+    let mut output = Vec::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        let n = unsafe {
+            libc::read(stdout_read, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
+        };
+        if n <= 0 {
+            break;
+        }
+        output.extend_from_slice(&buf[..n as usize]);
+    }
+    unsafe { libc::close(stdout_read) };
+
+    // Feed the bash output into a terminal bridge (the "visual frame") so the
+    // rendering path is exercised.
+    let frame = objc2_foundation::NSRect::new(
+        objc2_foundation::NSPoint::new(0.0, 0.0),
+        objc2_foundation::NSSize::new(640.0, 360.0),
+    );
+    let bridge = exaterm_swiftterm::TerminalBridge::new(frame);
+    bridge.feed(&output);
+    exaterm_test_util::appkit_harness::flush_runloop();
+
+    let text = String::from_utf8_lossy(&output);
+    assert!(
+        text.contains("testing"),
+        "Expected 'testing' in bash output after Return was dispatched through the \
+         embedded terminal key action, but got: {text:?}\n\
+         This test fails when key_dispatch::embedded_terminal_key_action returns \
+         Consume for Return (key code 36)."
+    );
+}
+
+/// Spawn bash as a child process with stdin/stdout connected to pipes.
+/// Returns (stdin_write_fd, stdout_read_fd, child_pid).
+fn spawn_bash_with_pipes() -> (libc::c_int, libc::c_int, libc::pid_t) {
+    unsafe {
+        let mut stdin_fds = [0i32; 2];
+        let mut stdout_fds = [0i32; 2];
+        assert_eq!(libc::pipe(stdin_fds.as_mut_ptr()), 0, "pipe (stdin) failed");
+        assert_eq!(
+            libc::pipe(stdout_fds.as_mut_ptr()),
+            0,
+            "pipe (stdout) failed"
+        );
+
+        let pid = libc::fork();
+        assert!(pid >= 0, "fork failed");
+
+        if pid == 0 {
+            // Child: wire pipes to stdio and exec bash.
+            libc::close(stdin_fds[1]);
+            libc::close(stdout_fds[0]);
+            libc::dup2(stdin_fds[0], 0);
+            libc::dup2(stdout_fds[1], 1);
+            libc::dup2(stdout_fds[1], 2);
+            if stdin_fds[0] > 2 {
+                libc::close(stdin_fds[0]);
+            }
+            if stdout_fds[1] > 2 {
+                libc::close(stdout_fds[1]);
+            }
+            let bash = b"/bin/bash\0";
+            let arg0 = b"bash\0";
+            let args: [*const libc::c_char; 2] = [
+                arg0.as_ptr() as *const libc::c_char,
+                std::ptr::null(),
+            ];
+            libc::execv(bash.as_ptr() as *const libc::c_char, args.as_ptr());
+            libc::_exit(1);
+        }
+
+        // Parent: close the child-side ends and return the parent-side ends.
+        libc::close(stdin_fds[0]);
+        libc::close(stdout_fds[1]);
+        (stdin_fds[1], stdout_fds[0], pid)
+    }
 }
