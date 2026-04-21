@@ -1,4 +1,5 @@
 use exaterm_types::model::{SessionId, SessionRecord, SessionStatus};
+use exaterm_types::synthesis::{TacticalState, TacticalSynthesis};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BattleCardStatus {
@@ -84,6 +85,28 @@ pub fn build_battle_card(
     }
 }
 
+pub fn apply_tactical_summary_status(
+    mut card: BattleCardViewModel,
+    summary: &TacticalSynthesis,
+) -> BattleCardViewModel {
+    card.status = match summary.tactical_state {
+        TacticalState::Idle => BattleCardStatus::Idle,
+        TacticalState::Stopped => BattleCardStatus::Stopped,
+        TacticalState::Thinking => BattleCardStatus::Thinking,
+        TacticalState::Working => BattleCardStatus::Working,
+        TacticalState::Blocked => BattleCardStatus::Blocked,
+        TacticalState::Failed => BattleCardStatus::Failed,
+        TacticalState::Complete => BattleCardStatus::Complete,
+        TacticalState::Detached => BattleCardStatus::Detached,
+    };
+    card.recency_label = match card.status {
+        BattleCardStatus::Idle | BattleCardStatus::Stopped => card.recency_label,
+        _ if card.recency_label.starts_with("idle ") => "active now".into(),
+        _ => card.recency_label,
+    };
+    card
+}
+
 pub fn derive_battle_card_status(
     session_status: SessionStatus,
     observed: &ObservedActivity,
@@ -138,9 +161,13 @@ fn recency_label(idle_seconds: Option<u64>, status: BattleCardStatus) -> String 
 
 #[cfg(test)]
 mod tests {
-    use super::{BattleCardStatus, ObservedActivity, build_battle_card, derive_battle_card_status};
+    use super::{
+        apply_tactical_summary_status, build_battle_card, derive_battle_card_status,
+        BattleCardStatus, ObservedActivity,
+    };
     use exaterm_core::model::user_shell_launch;
     use exaterm_types::model::{SessionId, SessionRecord, SessionStatus};
+    use exaterm_types::synthesis::{AttentionLevel, TacticalState, TacticalSynthesis};
 
     fn session(status: SessionStatus) -> SessionRecord {
         SessionRecord {
@@ -189,5 +216,51 @@ mod tests {
         assert!(card.headline.is_empty());
         assert!(card.evidence_fragments.is_empty());
         assert!(card.alignment.text.is_empty());
+    }
+
+    #[test]
+    fn tactical_summary_status_overrides_base_status() {
+        let card = build_battle_card(
+            &session(SessionStatus::Waiting),
+            &ObservedActivity {
+                idle_seconds: Some(75),
+                ..ObservedActivity::default()
+            },
+        );
+        let summary = TacticalSynthesis {
+            tactical_state: TacticalState::Blocked,
+            tactical_state_brief: None,
+            attention_level: AttentionLevel::Intervene,
+            attention_brief: None,
+            headline: None,
+        };
+
+        let card = apply_tactical_summary_status(card, &summary);
+
+        assert_eq!(card.status, BattleCardStatus::Blocked);
+        assert_eq!(card.recency_label, "active now");
+    }
+
+    #[test]
+    fn tactical_summary_status_preserves_idle_recency_for_stopped() {
+        let card = build_battle_card(
+            &session(SessionStatus::Waiting),
+            &ObservedActivity {
+                idle_seconds: Some(210),
+                ..ObservedActivity::default()
+            },
+        );
+        let summary = TacticalSynthesis {
+            tactical_state: TacticalState::Stopped,
+            tactical_state_brief: None,
+            attention_level: AttentionLevel::Guide,
+            attention_brief: None,
+            headline: None,
+        };
+
+        let card = apply_tactical_summary_status(card, &summary);
+
+        assert_eq!(card.status, BattleCardStatus::Stopped);
+        assert_eq!(card.recency_label, "idle 210s");
     }
 }

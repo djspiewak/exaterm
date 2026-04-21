@@ -4,6 +4,7 @@ members = [
     "crates/exaterm-core",
     "crates/exaterm-ui",
     "crates/exaterm-gtk",
+    "crates/exaterm-ui-tests",
     "crates/exaterm-macos",
     "crates/exaterm-swiftterm",
     "crates/exatermd",

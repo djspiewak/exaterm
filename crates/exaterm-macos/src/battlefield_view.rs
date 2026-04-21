@@ -11,8 +11,8 @@ use objc2::define_class;
 use objc2::rc::Retained;
 use objc2::{AnyThread, MainThreadOnly};
 use objc2_app_kit::{
-    NSAttributedStringNSStringDrawing, NSBezierPath, NSColor, NSEvent, NSGraphicsContext,
-    NSShadow, NSView,
+    NSAttributedStringNSStringDrawing, NSBezierPath, NSColor, NSEvent, NSGraphicsContext, NSShadow,
+    NSView,
 };
 use objc2_foundation::{NSAttributedString, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 
@@ -24,6 +24,7 @@ use exaterm_ui::layout::{
     card_layout, card_terminal_slot_rect, focus_card_layout, CardRect, MARGIN,
 };
 use exaterm_ui::presentation::NudgeStateTone;
+use exaterm_ui::presentation::{chrome_visibility, ChromeVisibility};
 
 // ---------------------------------------------------------------------------
 // Thread-local data bridge (main thread only)
@@ -163,12 +164,31 @@ fn session_at_point(frame: NSRect, point: NSPoint) -> Option<SessionId> {
         .map(|(card, _)| card.id)
 }
 
-fn layout_for_mode(card_count: usize, frame: NSRect, focused: bool) -> Vec<CardRect> {
+pub(crate) fn layout_for_mode(card_count: usize, frame: NSRect, focused: bool) -> Vec<CardRect> {
     if focused {
         focus_card_layout(card_count, frame.size.width, frame.size.height)
     } else {
         card_layout(card_count, frame.size.width, frame.size.height)
     }
+}
+
+pub(crate) fn card_chrome_visibility(
+    card: &CardRenderData,
+    focused_mode: bool,
+) -> ChromeVisibility {
+    let summarized = !card.headline.is_empty()
+        || card
+            .detail
+            .as_deref()
+            .is_some_and(|detail| !detail.is_empty())
+        || card.alert.as_deref().is_some_and(|alert| !alert.is_empty())
+        || card.attention.is_some()
+        || card.attention_bar.is_some();
+    let has_operator_summary = card
+        .last_nudge
+        .as_deref()
+        .is_some_and(|summary| !summary.is_empty());
+    chrome_visibility(summarized, focused_mode, has_operator_summary)
 }
 
 fn point_in_rect(point: NSPoint, rect: &CardRect) -> bool {
@@ -248,32 +268,38 @@ fn draw_card(
     let pad_y = 14.0;
     let mut y_cursor = rect.y + pad_y;
     let content_width = rect.w - 32.0;
+    let chrome = card_chrome_visibility(card, focused_mode);
 
     // Title.
-    let title_str = build_simple_attr_string(&card.title, &render.title_font, &render.title_color);
-    title_str.drawAtPoint(NSPoint {
-        x: rect.x + pad_x,
-        y: y_cursor,
-    });
-    y_cursor += if focused_mode { 20.0 } else { 24.0 };
+    if chrome.title_visible {
+        let title_str =
+            build_simple_attr_string(&card.title, &render.title_font, &render.title_color);
+        title_str.drawAtPoint(NSPoint {
+            x: rect.x + pad_x,
+            y: y_cursor,
+        });
+        y_cursor += if focused_mode { 20.0 } else { 24.0 };
+    }
 
-    draw_status_chip(
-        &card.status_label,
-        card.status,
-        rect.x + pad_x,
-        &mut y_cursor,
-        render,
-    );
-    if let Some(attention) = card.attention {
-        draw_attention_chip(
-            attention.label,
-            attention.fill,
-            rect.x + rect.w - 132.0,
+    if chrome.status_visible {
+        draw_status_chip(
+            &card.status_label,
+            card.status,
+            rect.x + pad_x,
             &mut y_cursor,
             render,
         );
+        if let Some(attention) = card.attention {
+            draw_attention_chip(
+                attention.label,
+                attention.fill,
+                rect.x + rect.w - 132.0,
+                &mut y_cursor,
+                render,
+            );
+        }
+        y_cursor += if focused_mode { 4.0 } else { 8.0 };
     }
-    y_cursor += if focused_mode { 4.0 } else { 8.0 };
 
     // Headline (synthesis).
     let headline = if embedded_terminal && !card.headline.is_empty() {
@@ -283,7 +309,7 @@ fn draw_card(
     } else {
         &card.headline
     };
-    if !headline.is_empty() {
+    if chrome.headline_visible && !headline.is_empty() {
         let headline_str =
             build_simple_attr_string(headline, &render.headline_font, &render.headline_color);
         headline_str.drawInRect(NSRect::new(
@@ -306,7 +332,7 @@ fn draw_card(
     }
 
     if let Some(ref detail) = card.detail {
-        if !detail.is_empty() && !embedded_terminal {
+        if chrome.headline_visible && !detail.is_empty() && !embedded_terminal {
             let detail_str =
                 build_simple_attr_string(detail, &render.detail_font, &render.detail_color);
             detail_str.drawInRect(NSRect::new(
@@ -319,7 +345,7 @@ fn draw_card(
 
     // Alert.
     if let Some(ref alert_text) = card.alert {
-        if !alert_text.is_empty() {
+        if chrome.headline_visible && !alert_text.is_empty() {
             let alert_line = format!("! {}", alert_text);
             let alert_str =
                 build_simple_attr_string(&alert_line, &render.alert_font, &render.alert_color);
@@ -333,15 +359,7 @@ fn draw_card(
 
     // Recency + control/nudge chip.
     if focused_mode {
-        // In focused mode, draw a control chip (AUTOPILOT/MONITOR style) instead of recency.
-        draw_control_chip(
-            card.nudge_state.label,
-            card.nudge_state.tone,
-            rect.x + pad_x,
-            y_cursor,
-            render,
-        );
-        y_cursor += 26.0;
+        y_cursor += 4.0;
     } else {
         let recency_str =
             build_simple_attr_string(&card.recency, &render.recency_font, &render.recency_color);
@@ -349,13 +367,15 @@ fn draw_card(
             x: rect.x + pad_x,
             y: y_cursor,
         });
-        draw_nudge_chip(
-            card.nudge_state.label,
-            card.nudge_state.tone,
-            rect.x + rect.w - 164.0,
-            y_cursor - 2.0,
-            render,
-        );
+        if chrome.nudge_state_visible {
+            draw_nudge_chip(
+                card.nudge_state.label,
+                card.nudge_state.tone,
+                rect.x + rect.w - 164.0,
+                y_cursor - 2.0,
+                render,
+            );
+        }
         y_cursor += 26.0;
     }
 
@@ -370,15 +390,17 @@ fn draw_card(
         let label =
             build_simple_attr_string("LIVE TERMINAL", &render.recency_font, &render.recency_color);
         label.drawAtPoint(NSPoint::new(slot.x + 10.0, slot.y + 8.0));
-        if let Some(attention_bar) = card.attention_bar {
-            draw_attention_condition_bar(
-                rect.x + pad_x,
-                (slot.y - 52.0).max(y_cursor),
-                content_width,
-                attention_bar.fill,
-                card.attention_bar_reason.as_deref(),
-                render,
-            );
+        if chrome.bars_visible {
+            if let Some(attention_bar) = card.attention_bar {
+                draw_attention_condition_bar(
+                    rect.x + pad_x,
+                    (slot.y - 52.0).max(y_cursor),
+                    content_width,
+                    attention_bar.fill,
+                    card.attention_bar_reason.as_deref(),
+                    render,
+                );
+            }
         }
         NSGraphicsContext::restoreGraphicsState_class();
         return;
@@ -398,15 +420,17 @@ fn draw_card(
         y_cursor += transcript_height + 10.0;
     }
 
-    if let Some(attention_bar) = card.attention_bar {
-        draw_attention_condition_bar(
-            rect.x + pad_x,
-            y_cursor,
-            content_width,
-            attention_bar.fill,
-            card.attention_bar_reason.as_deref(),
-            render,
-        );
+    if chrome.bars_visible {
+        if let Some(attention_bar) = card.attention_bar {
+            draw_attention_condition_bar(
+                rect.x + pad_x,
+                y_cursor,
+                content_width,
+                attention_bar.fill,
+                card.attention_bar_reason.as_deref(),
+                render,
+            );
+        }
     }
 
     NSGraphicsContext::restoreGraphicsState_class();
@@ -470,26 +494,6 @@ fn draw_attention_chip(
         x: x + 8.0,
         y: *y_cursor + 2.0,
     });
-}
-
-fn draw_control_chip(
-    label: &str,
-    tone: NudgeStateTone,
-    x: f64,
-    y: f64,
-    render: &TerminalRenderState,
-) {
-    let (text_color, bg_color, border_color) = render.control_chip(tone);
-    let chip_w = label.len() as f64 * 6.9 + 18.0;
-    let chip_rect = NSRect::new(NSPoint::new(x, y), NSSize::new(chip_w, 22.0));
-    let chip_path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(chip_rect, 10.0, 10.0);
-    bg_color.setFill();
-    chip_path.fill();
-    border_color.setStroke();
-    chip_path.setLineWidth(1.0);
-    chip_path.stroke();
-    let chip_str = build_simple_attr_string(label, &render.control_chip_font, text_color);
-    chip_str.drawAtPoint(NSPoint::new(x + 9.0, y + 3.0));
 }
 
 fn draw_nudge_chip(
@@ -580,7 +584,7 @@ fn draw_attention_condition_bar(
     }
 }
 
-fn transcript_lines(card: &CardRenderData) -> Vec<String> {
+pub(crate) fn transcript_lines(card: &CardRenderData) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(nudge) = card.last_nudge.as_deref() {
         if !nudge.is_empty() {

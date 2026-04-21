@@ -98,7 +98,7 @@ fn detect_alternate_screen(chunk: &[u8], mut in_alt: bool) -> bool {
             i += 2; // skip ESC [
             if i < chunk.len() && chunk[i] == b'?' {
                 i += 1; // skip ?
-                // Parse numeric parameter.
+                        // Parse numeric parameter.
                 let num_start = i;
                 while i < chunk.len() && chunk[i].is_ascii_digit() {
                     i += 1;
@@ -447,8 +447,8 @@ fn looks_consolidated_worthy(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DecodedLine, PaintConsolidator, PaintedLineTracker, TerminalStreamProcessor,
-        csi_implies_rewrite, decode_chunk, detect_alternate_screen, merge_paint_lines,
+        csi_implies_rewrite, decode_chunk, detect_alternate_screen, merge_paint_lines, DecodedLine,
+        PaintConsolidator, PaintedLineTracker, TerminalStreamProcessor,
     };
     use std::time::{Duration, Instant};
 

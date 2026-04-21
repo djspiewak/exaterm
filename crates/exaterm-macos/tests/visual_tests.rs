@@ -19,29 +19,62 @@ use exaterm_ui::supervision::BattleCardStatus;
 fn main() {
     exaterm_test_util::appkit_harness::run_tests(&[
         // Color and background tests
-        ("card_bg_has_vertical_gradient", card_bg_has_vertical_gradient),
+        (
+            "card_bg_has_vertical_gradient",
+            card_bg_has_vertical_gradient,
+        ),
         ("card_has_shadow_below", card_has_shadow_below),
         ("transcript_bg_matches_theme", transcript_bg_matches_theme),
-        ("transcript_border_matches_theme", transcript_border_matches_theme),
-        ("selected_card_border_is_bright", selected_card_border_is_bright),
-        ("attention_bar_calm_is_gradient", attention_bar_calm_is_gradient),
+        (
+            "transcript_border_matches_theme",
+            transcript_border_matches_theme,
+        ),
+        (
+            "selected_card_border_is_bright",
+            selected_card_border_is_bright,
+        ),
+        (
+            "attention_bar_calm_is_gradient",
+            attention_bar_calm_is_gradient,
+        ),
         // Text styling and positioning tests
         ("title_renders_at_top_of_card", title_renders_at_top_of_card),
-        ("status_chip_renders_below_title", status_chip_renders_below_title),
-        ("headline_text_rendered_and_positioned", headline_text_rendered_and_positioned),
-        ("detail_text_rendered_when_present", detail_text_rendered_when_present),
-        ("alert_text_rendered_with_prefix", alert_text_rendered_with_prefix),
-        ("recency_label_positioned_after_content", recency_label_positioned_after_content),
-        ("scrollback_uses_monospace_proportions", scrollback_uses_monospace_proportions),
+        (
+            "status_chip_renders_below_title",
+            status_chip_renders_below_title,
+        ),
+        (
+            "headline_text_rendered_and_positioned",
+            headline_text_rendered_and_positioned,
+        ),
+        (
+            "detail_text_rendered_when_present",
+            detail_text_rendered_when_present,
+        ),
+        (
+            "alert_text_rendered_with_prefix",
+            alert_text_rendered_with_prefix,
+        ),
+        (
+            "recency_label_positioned_after_content",
+            recency_label_positioned_after_content,
+        ),
+        (
+            "scrollback_uses_monospace_proportions",
+            scrollback_uses_monospace_proportions,
+        ),
         ("attention_bar_label_rendered", attention_bar_label_rendered),
         ("nudge_chip_renders_on_right", nudge_chip_renders_on_right),
-        ("focus_view_title_and_status_rendered", focus_view_title_and_status_rendered),
+        (
+            "focus_view_title_and_status_rendered",
+            focus_view_title_and_status_rendered,
+        ),
         ("focus_view_headline_rendered", focus_view_headline_rendered),
-        // Control chip and status bar tests
-        ("focus_rail_card_has_control_chip", focus_rail_card_has_control_chip),
+        // Status bar tests
         ("focus_view_has_status_bar", focus_view_has_status_bar),
         // Snapshot tests
         ("battlefield_snapshot", battlefield_snapshot),
+        ("battlefield_focus_rail_snapshot", battlefield_focus_rail_snapshot),
         ("focus_snapshot", focus_snapshot),
     ]);
 }
@@ -228,7 +261,7 @@ fn title_renders_at_top_of_card(mtm: MainThreadMarker) {
 
 /// Render a card. Assert that a region below the title contains the status chip.
 fn status_chip_renders_below_title(mtm: MainThreadMarker) {
-    let card = make_card(BattleCardStatus::Active, "Test", "");
+    let card = make_card(BattleCardStatus::Active, "Test", "Headline");
     let image = render_battlefield(mtm, vec![card], None, CARD_SIZE);
 
     // Status chip should be below the title, roughly y=50-70 from top of view
@@ -299,14 +332,21 @@ fn bright_content_in_region(
         for px in x..x.saturating_add(w).min(image.width) {
             if let Some(pixel) = exaterm_test_util::pixel_compare::pixel_at(image, px, py) {
                 total += 1;
-                let lum = 0.299 * (pixel[0] as f64) + 0.587 * (pixel[1] as f64) + 0.114 * (pixel[2] as f64);
-                if lum > 38.0 { // ~0.15 * 255
+                let lum = 0.299 * (pixel[0] as f64)
+                    + 0.587 * (pixel[1] as f64)
+                    + 0.114 * (pixel[2] as f64);
+                if lum > 38.0 {
+                    // ~0.15 * 255
                     bright += 1;
                 }
             }
         }
     }
-    if total == 0 { 0.0 } else { bright as f64 / total as f64 }
+    if total == 0 {
+        0.0
+    } else {
+        bright as f64 / total as f64
+    }
 }
 
 /// Render card with alert. Assert text in alert region with "!" prefix.
@@ -407,7 +447,11 @@ fn focus_view_title_and_status_rendered(mtm: MainThreadMarker) {
 
 /// Render focus view with headline. Assert headline region has text.
 fn focus_view_headline_rendered(mtm: MainThreadMarker) {
-    let data = make_focus(BattleCardStatus::Active, "Focus Test", "Build passing steadily");
+    let data = make_focus(
+        BattleCardStatus::Active,
+        "Focus Test",
+        "Build passing steadily",
+    );
     let image = render_focus(mtm, data, FOCUS_SIZE);
 
     // Headline below status chip, roughly y=78-120
@@ -418,28 +462,8 @@ fn focus_view_headline_rendered(mtm: MainThreadMarker) {
 }
 
 // ---------------------------------------------------------------------------
-// Control chip and status bar tests
+// Status bar tests
 // ---------------------------------------------------------------------------
-
-/// Render a card in focused mode (rail layout). Assert the control chip renders
-/// where the recency row would be in non-focused mode.
-fn focus_rail_card_has_control_chip(mtm: MainThreadMarker) {
-    let mut card = make_card(BattleCardStatus::Active, "Test", "Headline");
-    card.nudge_state = NudgeStatePresentation {
-        label: "AUTONUDGE ARMED",
-        css_class: "card-control-armed",
-        tone: NudgeStateTone::Armed,
-    };
-    let size = NSSize::new(400.0, 240.0);
-    let image = render_battlefield_focused(mtm, vec![card], None, size);
-
-    // In focused mode, the control chip renders left-aligned below the headline
-    // Layout: title(20) + chip(24) + 4 + headline(28) ≈ 76
-    assert!(
-        has_text_content(&image, 28, 72, 200, 30, 0.005),
-        "focused-mode card should render a control chip"
-    );
-}
 
 /// Render focus view, assert bottom region has status bar text.
 fn focus_view_has_status_bar(mtm: MainThreadMarker) {
@@ -498,9 +522,47 @@ fn battlefield_snapshot(mtm: MainThreadMarker) {
     }
 }
 
+/// Focused-rail battlefield snapshot baseline.
+fn battlefield_focus_rail_snapshot(mtm: MainThreadMarker) {
+    let cards = vec![
+        {
+            let mut c = make_card(BattleCardStatus::Active, "Session 1", "Compiling");
+            c.id = SessionId(1);
+            c.scrollback = vec!["$ cargo build".to_string()];
+            c
+        },
+        {
+            let mut c = make_card(BattleCardStatus::Blocked, "Session 2", "Approval needed");
+            c.id = SessionId(2);
+            c.attention = Some(AttentionPresentation {
+                fill: 4,
+                label: "INTERVENE",
+            });
+            c.alert = Some("Operator approval required".into());
+            c.scrollback = vec!["Proceed with deploy? [y/N]".into()];
+            c
+        },
+    ];
+    let image = render_battlefield_focused(mtm, cards, Some(SessionId(2)), NSSize::new(1200.0, 240.0));
+
+    let baselines = baselines_dir();
+    let config = CompareConfig {
+        channel_tolerance: 8,
+        match_threshold: 0.95,
+        ..CompareConfig::default()
+    };
+    if let Err(e) = assert_visual_match(&image, "battlefield_focus_rail", &baselines, &config) {
+        panic!("{}", e);
+    }
+}
+
 /// Focus view snapshot baseline.
 fn focus_snapshot(mtm: MainThreadMarker) {
-    let mut data = make_focus(BattleCardStatus::Active, "Focus Session", "Build in progress");
+    let mut data = make_focus(
+        BattleCardStatus::Active,
+        "Focus Session",
+        "Build in progress",
+    );
     data.attention = Some(AttentionPresentation {
         fill: 2,
         label: "MONITOR",

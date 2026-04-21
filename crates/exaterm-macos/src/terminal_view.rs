@@ -68,7 +68,8 @@ pub struct TerminalRenderState {
 
     // Control chip font and colors: nudge discriminant -> (text, bg, border).
     pub control_chip_font: Retained<NSFont>,
-    pub control_chip_colors: BTreeMap<u8, (Retained<NSColor>, Retained<NSColor>, Retained<NSColor>)>,
+    pub control_chip_colors:
+        BTreeMap<u8, (Retained<NSColor>, Retained<NSColor>, Retained<NSColor>)>,
 
     // Attention bar gradient endpoints: (left, right) for calm, watch, alert.
     pub bar_calm_left: Retained<NSColor>,
@@ -140,7 +141,10 @@ impl TerminalRenderState {
             let layer = style::card_layer_style(status);
             card_bg_colors.insert(
                 disc,
-                (ns_color(&layer.background_top), ns_color(&layer.background_bottom)),
+                (
+                    ns_color(&layer.background_top),
+                    ns_color(&layer.background_bottom),
+                ),
             );
         }
         attention_bg_colors.insert(1, style::color_to_nscolor(&theme::attention_chip_bg(1)));
@@ -150,30 +154,60 @@ impl TerminalRenderState {
         attention_bg_colors.insert(5, style::color_to_nscolor(&theme::attention_chip_bg(5)));
         {
             let (fg, bg) = theme::nudge_off_colors();
-            nudge_colors.insert(0, (style::color_to_nscolor(&fg), style::color_to_nscolor(&bg)));
+            nudge_colors.insert(
+                0,
+                (style::color_to_nscolor(&fg), style::color_to_nscolor(&bg)),
+            );
         }
         {
             let (fg, bg) = theme::nudge_armed_colors();
-            nudge_colors.insert(1, (style::color_to_nscolor(&fg), style::color_to_nscolor(&bg)));
+            nudge_colors.insert(
+                1,
+                (style::color_to_nscolor(&fg), style::color_to_nscolor(&bg)),
+            );
         }
         {
             let (fg, bg) = theme::nudge_cooldown_colors();
-            nudge_colors.insert(2, (style::color_to_nscolor(&fg), style::color_to_nscolor(&bg)));
+            nudge_colors.insert(
+                2,
+                (style::color_to_nscolor(&fg), style::color_to_nscolor(&bg)),
+            );
         }
 
         let control_chip_font = style::font_from_spec(&theme::control_chip_state_font());
         let mut control_chip_colors = BTreeMap::new();
         {
             let (t, b, bd) = theme::control_off_colors();
-            control_chip_colors.insert(0, (style::color_to_nscolor(&t), style::color_to_nscolor(&b), style::color_to_nscolor(&bd)));
+            control_chip_colors.insert(
+                0,
+                (
+                    style::color_to_nscolor(&t),
+                    style::color_to_nscolor(&b),
+                    style::color_to_nscolor(&bd),
+                ),
+            );
         }
         {
             let (t, b, bd) = theme::control_armed_colors();
-            control_chip_colors.insert(1, (style::color_to_nscolor(&t), style::color_to_nscolor(&b), style::color_to_nscolor(&bd)));
+            control_chip_colors.insert(
+                1,
+                (
+                    style::color_to_nscolor(&t),
+                    style::color_to_nscolor(&b),
+                    style::color_to_nscolor(&bd),
+                ),
+            );
         }
         {
             let (t, b, bd) = theme::control_cooldown_colors();
-            control_chip_colors.insert(2, (style::color_to_nscolor(&t), style::color_to_nscolor(&b), style::color_to_nscolor(&bd)));
+            control_chip_colors.insert(
+                2,
+                (
+                    style::color_to_nscolor(&t),
+                    style::color_to_nscolor(&b),
+                    style::color_to_nscolor(&bd),
+                ),
+            );
         }
         let calm = theme::bar_calm_gradient();
         let watch = theme::bar_watch_gradient();
@@ -250,7 +284,10 @@ impl TerminalRenderState {
     }
 
     /// Look up the cached control chip colors (text, bg, border) for a nudge tone.
-    pub fn control_chip(&self, tone: NudgeStateTone) -> (&Retained<NSColor>, &Retained<NSColor>, &Retained<NSColor>) {
+    pub fn control_chip(
+        &self,
+        tone: NudgeStateTone,
+    ) -> (&Retained<NSColor>, &Retained<NSColor>, &Retained<NSColor>) {
         let entry = &self.control_chip_colors[&nudge_discriminant(tone)];
         (&entry.0, &entry.1, &entry.2)
     }

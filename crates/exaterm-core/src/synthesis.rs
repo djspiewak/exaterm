@@ -2,7 +2,7 @@ pub use exaterm_types::synthesis::{
     AttentionLevel, NameSuggestion, NudgeSuggestion, TacticalState, TacticalSynthesis,
 };
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::env;
 use std::error::Error;
@@ -1251,14 +1251,14 @@ pub fn extract_response_text(payload: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        AttentionLevel, CliBackend, DEFAULT_CLAUDE_CLI_MODEL, DEFAULT_CODEX_CLI_MODEL,
-        DEFAULT_NAMING_MODEL, DEFAULT_NUDGE_MODEL, DEFAULT_SUMMARY_MODEL, NameSuggestion,
+        extract_response_text, name_signature, normalize_naming_model, normalize_summary_model,
+        nudge_schema, nudge_signature, openai_chat_completions_url, run_command_with_input,
+        should_skip_repeated_paused_summary, summary_signature, summary_substantive_signature,
+        synthesis_schema, tactical_system_prompt, AttentionLevel, CliBackend, NameSuggestion,
         NamingEvidence, NudgeEvidence, OpenAiBackend, ProviderPreferences,
         SynthesisBackendRegistry, SynthesisProvider, TacticalEvidence, TacticalState,
-        TacticalSynthesis, extract_response_text, name_signature, normalize_naming_model,
-        normalize_summary_model, nudge_schema, nudge_signature, openai_chat_completions_url,
-        run_command_with_input, should_skip_repeated_paused_summary, summary_signature,
-        summary_substantive_signature, synthesis_schema, tactical_system_prompt,
+        TacticalSynthesis, DEFAULT_CLAUDE_CLI_MODEL, DEFAULT_CODEX_CLI_MODEL, DEFAULT_NAMING_MODEL,
+        DEFAULT_NUDGE_MODEL, DEFAULT_SUMMARY_MODEL,
     };
     use serde_json::json;
     use std::collections::BTreeSet;
@@ -1862,11 +1862,9 @@ printf 'stdin:%s\n' "$input"
         assert!(fixtures.len() >= 12);
         assert!(fixtures.iter().any(|(name, _, _)| name.contains("codex")));
         assert!(fixtures.iter().any(|(name, _, _)| name.contains("claude")));
-        assert!(
-            fixtures
-                .iter()
-                .all(|(_, evidence, _)| evidence.recent_terminal_activity.len() >= 6)
-        );
+        assert!(fixtures
+            .iter()
+            .all(|(_, evidence, _)| evidence.recent_terminal_activity.len() >= 6));
         assert!(fixtures.iter().any(|(_, _, expectations)| {
             expectations
                 .attention_levels
@@ -2435,17 +2433,12 @@ printf 'stdin:%s\n' "$input"
     #[test]
     fn tactical_prompt_requires_real_state_and_high_bar_for_complete() {
         let prompt = tactical_system_prompt();
-        assert!(
-            prompt.contains(
-                "You must always choose a real tactical_state and a real attention_level."
-            )
-        );
+        assert!(prompt
+            .contains("You must always choose a real tactical_state and a real attention_level."));
         assert!(prompt.contains("use complete rarely; the bar is high"));
         assert!(prompt.contains("do not use complete for 'looks good'"));
-        assert!(
-            prompt
-                .contains("when unsure between idle and stopped after recent work, prefer stopped")
-        );
+        assert!(prompt
+            .contains("when unsure between idle and stopped after recent work, prefer stopped"));
     }
 
     #[test]

@@ -4,7 +4,8 @@ use crate::presentation::{
     SegmentedBarPresentation,
 };
 use crate::supervision::{
-    build_battle_card, derive_battle_card_status, BattleCardStatus, ObservedActivity,
+    apply_tactical_summary_status, build_battle_card, derive_battle_card_status, BattleCardStatus,
+    ObservedActivity,
 };
 use crate::workspace_view::WorkspaceViewState;
 use exaterm_types::model::SessionId;
@@ -47,6 +48,22 @@ pub struct FocusRenderData {
     pub attention_reason: Option<String>,
     pub attention_bar: Option<SegmentedBarPresentation>,
     pub attention_bar_reason: Option<String>,
+}
+
+impl FocusRenderData {
+    pub fn summarized(&self) -> bool {
+        !self.combined_headline.is_empty()
+            || self.attention.is_some()
+            || self.attention_bar.is_some()
+    }
+
+    pub fn visual_status(&self) -> BattleCardStatus {
+        if self.summarized() {
+            self.status
+        } else {
+            BattleCardStatus::Idle
+        }
+    }
 }
 
 /// Extract headline, detail, and alert strings from an optional `TacticalSynthesis`.
@@ -179,7 +196,16 @@ impl AppState {
                     .get(&session.id)
                     .cloned()
                     .unwrap_or_default();
-                let card = build_battle_card(session, &observed);
+                let summary = self.summaries.get(&session.id);
+                let card = summary.map_or_else(
+                    || build_battle_card(session, &observed),
+                    |summary| {
+                        apply_tactical_summary_status(
+                            build_battle_card(session, &observed),
+                            summary,
+                        )
+                    },
+                );
                 let scrollback = self
                     .recent_lines
                     .get(&session.id)
@@ -199,17 +225,14 @@ impl AppState {
                     .as_deref()
                     .unwrap_or(&card.title)
                     .to_string();
-                let (headline, detail, alert) =
-                    extract_synthesis_fields(self.summaries.get(&session.id));
+                let (headline, detail, alert) = extract_synthesis_fields(summary);
                 let status_label = status_chip_label(card.status, &card.recency_label);
-                let (attention, attention_reason) =
-                    attention_presentation(self.summaries.get(&session.id))
-                        .map(|(presentation, reason)| (Some(presentation), reason))
-                        .unwrap_or((None, None));
-                let (attention_bar, attention_bar_reason) =
-                    attention_bar_presentation(self.summaries.get(&session.id))
-                        .map(|(presentation, reason)| (Some(presentation), reason))
-                        .unwrap_or((None, None));
+                let (attention, attention_reason) = attention_presentation(summary)
+                    .map(|(presentation, reason)| (Some(presentation), reason))
+                    .unwrap_or((None, None));
+                let (attention_bar, attention_bar_reason) = attention_bar_presentation(summary)
+                    .map(|(presentation, reason)| (Some(presentation), reason))
+                    .unwrap_or((None, None));
                 let auto_nudge_enabled = self
                     .auto_nudge_enabled
                     .get(&session.id)
@@ -229,9 +252,7 @@ impl AppState {
                     scrollback,
                     combined_headline: combined_focus_summary_text(
                         &headline,
-                        self.summaries
-                            .get(&session.id)
-                            .and_then(|summary| summary.attention_brief.as_deref()),
+                        summary.and_then(|summary| summary.attention_brief.as_deref()),
                     ),
                     headline,
                     detail,
@@ -258,13 +279,16 @@ impl AppState {
             .get(&session_id)
             .cloned()
             .unwrap_or_default();
-        let card = build_battle_card(session, &observed);
+        let summary = self.summaries.get(&session_id);
+        let card = summary.map_or_else(
+            || build_battle_card(session, &observed),
+            |summary| apply_tactical_summary_status(build_battle_card(session, &observed), summary),
+        );
         let title = session
             .display_name
             .as_deref()
             .unwrap_or(&card.title)
             .to_string();
-        let summary = self.summaries.get(&session_id);
         let status_label = status_chip_label(card.status, &card.recency_label);
         let (headline, _, _) = extract_synthesis_fields(summary);
         let (attention, attention_reason) = attention_presentation(summary)
@@ -814,5 +838,73 @@ mod tests {
             focus.attention_bar_reason.as_deref(),
             Some("Operator action is required before progress can resume.")
         );
+    }
+
+    #[test]
+    fn card_render_data_uses_summary_status_labels() {
+        use exaterm_types::synthesis::{AttentionLevel, TacticalState, TacticalSynthesis};
+
+        let mut state = AppState::new();
+        let mut blocked = make_session_snapshot(1, "Blocked", SessionStatus::Waiting);
+        blocked.observation.last_change_age_secs = 75;
+        blocked.summary = Some(TacticalSynthesis {
+            tactical_state: TacticalState::Blocked,
+            tactical_state_brief: Some("Waiting on approval".into()),
+            attention_level: AttentionLevel::Takeover,
+            attention_brief: Some("Operator approval is required.".into()),
+            headline: Some("Deploy is blocked on approval.".into()),
+        });
+        let mut stopped = make_session_snapshot(2, "Stopped", SessionStatus::Waiting);
+        stopped.observation.last_change_age_secs = 210;
+        stopped.summary = Some(TacticalSynthesis {
+            tactical_state: TacticalState::Stopped,
+            tactical_state_brief: Some("Waiting for a nudge".into()),
+            attention_level: AttentionLevel::Guide,
+            attention_brief: Some("Ready for the next pass.".into()),
+            headline: Some("Checkpoint complete.".into()),
+        });
+
+        state.apply_snapshot(&make_snapshot(vec![blocked, stopped]));
+
+        let cards = state.card_render_data();
+        assert_eq!(cards[0].status, BattleCardStatus::Blocked);
+        assert_eq!(cards[0].status_label, "Blocked");
+        assert_eq!(cards[1].status, BattleCardStatus::Stopped);
+        assert_eq!(cards[1].status_label, "STOPPED - 210s");
+    }
+
+    #[test]
+    fn focus_render_data_uses_summary_status_label() {
+        use exaterm_types::synthesis::{AttentionLevel, TacticalState, TacticalSynthesis};
+
+        let mut state = AppState::new();
+        let mut snap = make_session_snapshot(1, "Shell", SessionStatus::Waiting);
+        snap.observation.last_change_age_secs = 75;
+        snap.summary = Some(TacticalSynthesis {
+            tactical_state: TacticalState::Blocked,
+            tactical_state_brief: Some("Waiting on operator".into()),
+            attention_level: AttentionLevel::Intervene,
+            attention_brief: Some("Operator action is required before progress can resume.".into()),
+            headline: Some("Hard stop waiting on operator input.".into()),
+        });
+
+        state.apply_snapshot(&make_snapshot(vec![snap]));
+
+        let focus = state.focus_render_data(SessionId(1)).unwrap();
+        assert_eq!(focus.status, BattleCardStatus::Blocked);
+        assert_eq!(focus.status_label, "Blocked");
+    }
+
+    #[test]
+    fn unsummarized_focus_visual_status_is_idle() {
+        let mut state = AppState::new();
+        let snap = make_session_snapshot(1, "Shell", SessionStatus::Running);
+
+        state.apply_snapshot(&make_snapshot(vec![snap]));
+
+        let focus = state.focus_render_data(SessionId(1)).unwrap();
+        assert!(!focus.summarized());
+        assert_eq!(focus.status, BattleCardStatus::Active);
+        assert_eq!(focus.visual_status(), BattleCardStatus::Idle);
     }
 }

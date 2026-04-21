@@ -51,7 +51,8 @@ pub fn capture_view(view: &NSView) -> Option<CapturedImage> {
 
 const MIN_CAPTURE_DIM: f64 = 50.0;
 
-const DEFAULT_CAPTURE_FRAME: NSRect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(800.0, 600.0));
+const DEFAULT_CAPTURE_FRAME: NSRect =
+    NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(800.0, 600.0));
 
 /// Capture the entire content view of an `NSWindow`.
 #[must_use]
@@ -165,11 +166,7 @@ fn create_bitmap_rep(width: u32, height: u32) -> Option<objc2::rc::Retained<NSBi
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss
 )]
-fn extract_pixels(
-    rep: &NSBitmapImageRep,
-    width: u32,
-    height: u32,
-) -> Option<CapturedImage> {
+fn extract_pixels(rep: &NSBitmapImageRep, width: u32, height: u32) -> Option<CapturedImage> {
     let ptr = rep.bitmapData();
     if ptr.is_null() {
         return None;
@@ -191,5 +188,9 @@ fn extract_pixels(
         data
     };
 
-    Some(CapturedImage { width, height, data })
+    Some(CapturedImage {
+        width,
+        height,
+        data,
+    })
 }

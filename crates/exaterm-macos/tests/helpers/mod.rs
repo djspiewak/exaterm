@@ -2,8 +2,8 @@
 
 use std::rc::Rc;
 
-use objc2::{msg_send, MainThreadOnly};
 use objc2::rc::Retained;
+use objc2::{msg_send, MainThreadOnly};
 use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
 
@@ -111,11 +111,7 @@ pub fn render_battlefield_focused(
 }
 
 /// Create an NSWindow + FocusView, set focus data, capture off-screen, return RgbaImage.
-pub fn render_focus(
-    mtm: MainThreadMarker,
-    data: FocusRenderData,
-    size: NSSize,
-) -> RgbaImage {
+pub fn render_focus(mtm: MainThreadMarker, data: FocusRenderData, size: NSSize) -> RgbaImage {
     let render = Rc::new(TerminalRenderState::new());
 
     focus_view::set_focus_data(Some(data), render);
@@ -135,9 +131,8 @@ pub fn render_focus(
 }
 
 fn create_test_window(mtm: MainThreadMarker, size: NSSize) -> Retained<NSWindow> {
-    let style = NSWindowStyleMask::Titled
-        | NSWindowStyleMask::Closable
-        | NSWindowStyleMask::Resizable;
+    let style =
+        NSWindowStyleMask::Titled | NSWindowStyleMask::Closable | NSWindowStyleMask::Resizable;
     let rect = NSRect::new(NSPoint::new(100.0, 100.0), size);
     unsafe {
         NSWindow::initWithContentRect_styleMask_backing_defer(

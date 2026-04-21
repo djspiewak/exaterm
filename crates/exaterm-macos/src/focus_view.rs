@@ -12,6 +12,7 @@ use objc2_foundation::{NSAttributedString, NSObjectProtocol, NSPoint, NSRect, NS
 use crate::app_state::FocusRenderData;
 use crate::terminal_view::TerminalRenderState;
 use exaterm_ui::layout::{focus_terminal_slot_rect, FOCUS_STATUS_BAR_HEIGHT};
+use exaterm_ui::presentation::chrome_visibility;
 use exaterm_ui::theme;
 use exaterm_ui::theme::Color;
 
@@ -64,24 +65,25 @@ fn draw_focus(frame: NSRect) {
     );
     let corner = 24.0;
     let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(card_rect, corner, corner);
+    let visual_status = data.visual_status();
     let border = crate::style::color_to_nscolor(&theme::focus_card_border());
     // Draw shadow before fill.
     {
-        let shadow_theme = theme::card_theme(data.status).shadow;
+        let shadow_theme = theme::card_theme(visual_status).shadow;
         let shadow = NSShadow::new();
         shadow.setShadowOffset(NSSize::new(0.0, -f64::from(shadow_theme.offset_y)));
         shadow.setShadowBlurRadius(f64::from(shadow_theme.blur));
         shadow.setShadowColor(Some(&crate::style::color_to_nscolor(&shadow_theme.color)));
         NSGraphicsContext::saveGraphicsState_class();
         shadow.set();
-        render.card_bg_top(data.status).setFill();
+        render.card_bg_top(visual_status).setFill();
         path.fill();
         NSGraphicsContext::restoreGraphicsState_class();
     }
     crate::style::draw_vertical_gradient(
         &path,
-        render.card_bg_top(data.status),
-        render.card_bg_bottom(data.status),
+        render.card_bg_top(visual_status),
+        render.card_bg_bottom(visual_status),
     );
     border.setStroke();
     path.setLineWidth(1.0);
@@ -92,31 +94,36 @@ fn draw_focus(frame: NSRect) {
 
     let pad_x = card_rect.origin.x + 18.0;
     let mut y = card_rect.origin.y + 16.0;
-    build_simple_attr_string(&data.title, &render.title_font, &render.title_color)
-        .drawAtPoint(NSPoint::new(pad_x, y));
-    y += 28.0;
+    let chrome = chrome_visibility(data.summarized(), true, false);
+    if chrome.title_visible {
+        build_simple_attr_string(&data.title, &render.title_font, &render.title_color)
+            .drawAtPoint(NSPoint::new(pad_x, y));
+        y += 28.0;
+    }
 
-    draw_chip(
-        &data.status_label,
-        render.chip_text_color(data.status),
-        render.chip_bg_color(data.status),
-        &render.status_font,
-        pad_x,
-        y,
-    );
-    if let Some(attention) = data.attention {
+    if chrome.status_visible {
         draw_chip(
-            attention.label,
-            &render.attention_chip_text,
-            render.attention_chip_bg(attention.fill),
+            &data.status_label,
+            render.chip_text_color(visual_status),
+            render.chip_bg_color(visual_status),
             &render.status_font,
-            pad_x + 140.0,
+            pad_x,
             y,
         );
+        if let Some(attention) = data.attention {
+            draw_chip(
+                attention.label,
+                &render.attention_chip_text,
+                render.attention_chip_bg(attention.fill),
+                &render.status_font,
+                pad_x + 140.0,
+                y,
+            );
+        }
+        y += 34.0;
     }
-    y += 34.0;
 
-    if !data.combined_headline.is_empty() {
+    if chrome.headline_visible && !data.combined_headline.is_empty() {
         build_simple_attr_string(
             &data.combined_headline,
             &render.headline_font,
@@ -126,18 +133,6 @@ fn draw_focus(frame: NSRect) {
             NSPoint::new(pad_x, y),
             NSSize::new((card_rect.size.width - 36.0).max(0.0), 56.0),
         ));
-        y += 64.0;
-    }
-
-    if let Some(attention_bar) = data.attention_bar {
-        draw_attention_bar(
-            pad_x,
-            y,
-            (card_rect.size.width - 36.0).max(0.0),
-            attention_bar.fill,
-            data.attention_bar_reason.as_deref(),
-            &render,
-        );
     }
 
     let slot = focus_terminal_slot_rect(frame.size.width as i32, frame.size.height as i32);
@@ -152,6 +147,10 @@ fn draw_focus(frame: NSRect) {
     terminal_path.fill();
 
     NSGraphicsContext::restoreGraphicsState_class();
+
+    if !chrome.header_visible {
+        return;
+    }
 
     // Status bar at the very bottom of the focus view.
     let status_bar_y = frame.size.height - FOCUS_STATUS_BAR_HEIGHT;
@@ -183,51 +182,6 @@ fn draw_chip(
     bg.setFill();
     chip_path.fill();
     build_simple_attr_string(label, font, text).drawAtPoint(NSPoint::new(x + 9.0, y + 3.0));
-}
-
-fn draw_attention_bar(
-    x: f64,
-    y: f64,
-    width: f64,
-    fill: usize,
-    reason: Option<&str>,
-    render: &TerminalRenderState,
-) {
-    build_simple_attr_string(
-        "ATTENTION CONDITION",
-        &render.bar_caption_font,
-        &render.bar_caption_color,
-    )
-    .drawAtPoint(NSPoint::new(x, y));
-
-    let segment_y = y + 18.0;
-    let gap = 4.0;
-    let segment_width = ((width - (gap * 4.0)).max(0.0)) / 5.0;
-    for index in 0..5 {
-        let segment_x = x + (index as f64 * (segment_width + gap));
-        let rect = NSRect::new(
-            NSPoint::new(segment_x, segment_y),
-            NSSize::new(segment_width, 8.0),
-        );
-        let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, 4.0, 4.0);
-        if index < fill {
-            let (left, right) = render.attention_bar_gradient(fill);
-            crate::style::draw_horizontal_gradient(&path, left, right);
-        } else {
-            render.bar_empty.setFill();
-            path.fill();
-        }
-    }
-
-    if let Some(reason) = reason {
-        if !reason.is_empty() {
-            build_simple_attr_string(reason, &render.bar_reason_font, &render.bar_reason_color)
-                .drawInRect(NSRect::new(
-                    NSPoint::new(x, segment_y + 14.0),
-                    NSSize::new(width, 42.0),
-                ));
-        }
-    }
 }
 
 fn ns_color(c: Color) -> Retained<NSColor> {

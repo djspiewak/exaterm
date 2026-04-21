@@ -500,21 +500,24 @@ pub fn generate_application_css() -> String {
         bec = css_color(&theme::bar_empty_color()),
     ));
 
-    parts.push(format!("\
+    parts.push(format!(
+        "\
         .bar-calm {{\n\
         {i}background: {g};\n\
         }}",
         g = css_gradient(90, &theme::bar_calm_gradient()),
     ));
 
-    parts.push(format!("\
+    parts.push(format!(
+        "\
         .bar-watch {{\n\
         {i}background: {g};\n\
         }}",
         g = css_gradient(90, &theme::bar_watch_gradient()),
     ));
 
-    parts.push(format!("\
+    parts.push(format!(
+        "\
         .bar-alert {{\n\
         {i}background: {g};\n\
         }}",

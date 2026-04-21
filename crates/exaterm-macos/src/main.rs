@@ -12,6 +12,8 @@ use exaterm_macos::app_state;
 #[cfg(target_os = "macos")]
 use exaterm_macos::battlefield_view;
 #[cfg(target_os = "macos")]
+use exaterm_macos::empty_state_view;
+#[cfg(target_os = "macos")]
 use exaterm_macos::focus_view;
 #[cfg(target_os = "macos")]
 use exaterm_macos::style;
@@ -19,6 +21,8 @@ use exaterm_macos::style;
 use exaterm_macos::terminal_view;
 #[cfg(target_os = "macos")]
 use exaterm_macos::window;
+#[cfg(target_os = "macos")]
+use exaterm_macos::workspace_support;
 
 #[cfg(target_os = "macos")]
 use std::cell::RefCell;
@@ -27,9 +31,9 @@ use std::collections::{BTreeMap, BTreeSet};
 #[cfg(target_os = "macos")]
 use std::rc::Rc;
 #[cfg(target_os = "macos")]
-use std::sync::Arc;
-#[cfg(target_os = "macos")]
 use std::sync::atomic::AtomicBool;
+#[cfg(target_os = "macos")]
+use std::sync::Arc;
 
 #[cfg(target_os = "macos")]
 use objc2_foundation::{NSPoint, NSRect, NSSize};
@@ -71,7 +75,7 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
         NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSView, NSWindow,
         NSWindowStyleMask,
     };
-    use objc2_foundation::{NSPoint, NSRect, NSSize, ns_string};
+    use objc2_foundation::{ns_string, NSPoint, NSRect, NSSize};
 
     let mtm = MainThreadMarker::new().expect("must be called from the main thread");
 
@@ -107,6 +111,10 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
     let session_ios = Rc::new(RefCell::new(session_io::SessionIOMap::new()));
     let sync_inputs_enabled = Arc::new(AtomicBool::new(false));
     app_delegate::set_sync_inputs_state(sync_inputs_enabled.clone());
+    let terminal_surfaces = Rc::new(RefCell::new(BTreeMap::<
+        exaterm_types::model::SessionId,
+        TerminalSurface,
+    >::new()));
 
     // Create and configure the main window.
     let style_mask = NSWindowStyleMask::Titled
@@ -153,6 +161,7 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
             NSSize::new(window::WINDOW_DEFAULT_WIDTH, window::WINDOW_DEFAULT_HEIGHT),
         ),
     );
+    let empty_state = empty_state_view::build_empty_state(mtm, content_view.frame());
 
     let battlefield_view: Retained<battlefield_view::BattlefieldView> = unsafe {
         let frame = NSRect::new(
@@ -172,6 +181,7 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
         msg_send![focus_view::FocusView::alloc(mtm), initWithFrame: frame]
     };
 
+    empty_state.container.setHidden(true);
     battlefield_view.setHidden(false);
     focus_panel.setHidden(true);
 
@@ -189,13 +199,35 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
     let battlefield_state = Rc::clone(&state);
     let battlefield_window = main_window.clone();
     let interaction_window = battlefield_window.clone();
+    let interaction_surfaces = Rc::clone(&terminal_surfaces);
     battlefield_view::set_interaction_handler(move |interaction| match interaction {
         battlefield_view::BattlefieldInteraction::Select(session_id) => {
-            battlefield_state
-                .borrow_mut()
-                .workspace
-                .select_session(session_id);
-            interaction_window.makeFirstResponder(None);
+            let frame = interaction_window
+                .contentView()
+                .map(|view| view.frame())
+                .unwrap_or_else(|| {
+                    NSRect::new(
+                        NSPoint::new(0.0, 0.0),
+                        NSSize::new(window::WINDOW_DEFAULT_WIDTH, window::WINDOW_DEFAULT_HEIGHT),
+                    )
+                });
+            match workspace_support::activate_battlefield_session(
+                &mut battlefield_state.borrow_mut(),
+                frame,
+                session_id,
+            ) {
+                workspace_support::BattlefieldActivation::SelectedEmbedded(session_id) => {
+                    if let Some(surface) = interaction_surfaces.borrow().get(&session_id) {
+                        interaction_window.makeFirstResponder(Some(&*surface.view));
+                    } else {
+                        interaction_window.makeFirstResponder(None);
+                    }
+                }
+                workspace_support::BattlefieldActivation::Focused(_)
+                | workspace_support::BattlefieldActivation::ReturnedToBattlefield => {
+                    interaction_window.makeFirstResponder(None);
+                }
+            }
         }
         battlefield_view::BattlefieldInteraction::Focus(session_id) => {
             battlefield_state
@@ -206,6 +238,7 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
         }
     });
 
+    content_view.addSubview(&empty_state.container);
     content_view.addSubview(&battlefield_view);
     content_view.addSubview(&focus_panel);
     main_window.setContentView(Some(&content_view));
@@ -216,14 +249,11 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
 
     // Set up a 100ms repeating timer to drain daemon events, session output, and refresh display.
     let timer_state = Rc::clone(&state);
+    let timer_empty_state = empty_state.container.clone();
     let timer_battlefield_view = battlefield_view.clone();
     let timer_focus_panel = focus_panel.clone();
     let timer_ios = Rc::clone(&session_ios);
     let render_state = Rc::new(terminal_view::TerminalRenderState::new());
-    let terminal_surfaces = Rc::new(RefCell::new(BTreeMap::<
-        exaterm_types::model::SessionId,
-        TerminalSurface,
-    >::new()));
 
     let stream_processors = Rc::new(RefCell::new(BTreeMap::<
         exaterm_types::model::SessionId,
@@ -301,7 +331,10 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
                     let mut state = timer_state.borrow_mut();
                     for (session_id, lines) in stream_updates {
                         exaterm_core::observation::append_recent_lines(
-                            state.recent_lines.entry(session_id).or_insert_with(Vec::new),
+                            state
+                                .recent_lines
+                                .entry(session_id)
+                                .or_insert_with(Vec::new),
                             &lines,
                         );
                     }
@@ -332,33 +365,19 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
                 cards.len(),
                 content_bounds.size.width,
                 if focused.is_some() {
-                    240.0
+                    workspace_support::FOCUS_RAIL_HEIGHT
                 } else {
                     content_bounds.size.height
                 },
             );
-            let columns = exaterm_ui::layout::battlefield_columns(
-                cards.len(),
-                content_bounds.size.width as i32,
-                focused.is_some(),
-            ) as usize;
-            let embeds = focused.is_none()
-                && exaterm_ui::layout::battlefield_can_embed_terminals(
-                    cards.len(),
-                    columns.max(1),
-                    content_bounds.size.width as i32,
-                    content_bounds.size.height as i32,
-                );
-            let mut embedded_ids = BTreeSet::new();
-            if embeds {
-                for card in &cards {
-                    embedded_ids.insert(card.id);
-                }
-            }
+            let embedded_ids =
+                workspace_support::embedded_session_ids(&cards, content_bounds, focused);
             layout_views(
                 &content_view,
+                &timer_empty_state,
                 &timer_battlefield_view,
                 &timer_focus_panel,
+                !cards.is_empty(),
                 focused,
             );
             battlefield_view::set_battlefield_data(
@@ -432,6 +451,22 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
 
             // Battlefield mode keyboard handling.
             if !in_focus {
+                let selected_embedded = key_window.contentView().is_some_and(|content| {
+                    battlefield_embeds_selected_terminal(&key_state.borrow(), content.frame())
+                });
+                if selected_embedded {
+                    let selected = key_state.borrow().workspace.selected_session();
+                    if let Some(session_id) = selected {
+                        if let Some(surface) = key_surfaces.borrow().get(&session_id) {
+                            if key_code == 36 {
+                                key_window.makeFirstResponder(Some(&*surface.view));
+                                return std::ptr::null_mut();
+                            }
+                            return event.as_ptr();
+                        }
+                    }
+                }
+
                 match key_code {
                     // Enter: focus the selected session.
                     36 => {
@@ -526,6 +561,22 @@ fn terminal_appearance() -> exaterm_swiftterm::TerminalAppearance {
 }
 
 #[cfg(target_os = "macos")]
+fn battlefield_embeds_selected_terminal(
+    state: &app_state::AppState,
+    content_frame: NSRect,
+) -> bool {
+    let Some(session_id) = state.workspace.selected_session() else {
+        return false;
+    };
+    workspace_support::embedded_session_ids(
+        &state.card_render_data(),
+        content_frame,
+        state.workspace.focused_session(),
+    )
+    .contains(&session_id)
+}
+
+#[cfg(target_os = "macos")]
 fn ensure_terminal_surfaces(
     surfaces: &mut BTreeMap<exaterm_types::model::SessionId, TerminalSurface>,
     sessions: &[exaterm_types::model::SessionRecord],
@@ -573,30 +624,21 @@ fn ensure_terminal_surfaces(
 #[cfg(target_os = "macos")]
 fn layout_views(
     content_view: &objc2_app_kit::NSView,
+    empty_state: &objc2_app_kit::NSView,
     battlefield_view: &battlefield_view::BattlefieldView,
     focus_panel: &focus_view::FocusView,
+    has_sessions: bool,
     focused: Option<exaterm_types::model::SessionId>,
 ) {
-    const FOCUS_RAIL_HEIGHT: f64 = 240.0;
-
     let frame = content_view.frame();
-    if focused.is_some() {
-        battlefield_view.setHidden(false);
-        focus_panel.setHidden(false);
-        let rail_height = frame.size.height.min(FOCUS_RAIL_HEIGHT);
-        let focus_height = (frame.size.height - rail_height).max(0.0);
-        battlefield_view.setFrame(NSRect::new(
-            NSPoint::new(0.0, focus_height),
-            NSSize::new(frame.size.width, rail_height),
-        ));
-        focus_panel.setFrame(NSRect::new(
-            NSPoint::new(0.0, 0.0),
-            NSSize::new(frame.size.width, focus_height),
-        ));
-    } else {
-        battlefield_view.setHidden(false);
-        focus_panel.setHidden(true);
-        battlefield_view.setFrame(frame);
+    let layout = workspace_support::workspace_layout(frame, has_sessions, focused);
+
+    empty_state.setHidden(!layout.empty_state_visible);
+    battlefield_view.setHidden(!layout.battlefield_visible);
+    focus_panel.setHidden(!layout.focus_visible);
+    battlefield_view.setFrame(layout.battlefield_frame);
+    if layout.focus_visible {
+        focus_panel.setFrame(layout.focus_frame);
     }
 }
 
@@ -636,7 +678,8 @@ fn terminal_placement_for_session(
     focused: Option<exaterm_types::model::SessionId>,
 ) -> TerminalPlacement {
     if focused == Some(session_id) {
-        let slot = exaterm_ui::layout::focus_terminal_slot_rect(focus_panel_width, focus_panel_height);
+        let slot =
+            exaterm_ui::layout::focus_terminal_slot_rect(focus_panel_width, focus_panel_height);
         return TerminalPlacement::Focused(NSRect::new(
             NSPoint::new(slot.x, slot.y),
             NSSize::new(slot.w, slot.h),
@@ -732,13 +775,13 @@ fn present_startup_error(mtm: objc2::MainThreadMarker, error: &str) {
 #[cfg(test)]
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
-    use super::TerminalPlacement;
     use super::terminal_placement_for_session;
+    use super::TerminalPlacement;
     use exaterm_macos::app_state::CardRenderData;
-    use exaterm_ui::layout::{CardRect, card_terminal_slot_rect};
+    use exaterm_types::model::SessionId;
+    use exaterm_ui::layout::{card_terminal_slot_rect, CardRect};
     use exaterm_ui::presentation::nudge_state_presentation;
     use exaterm_ui::supervision::BattleCardStatus;
-    use exaterm_types::model::SessionId;
     use objc2_foundation::{NSPoint, NSRect, NSSize};
     use std::collections::BTreeSet;
 

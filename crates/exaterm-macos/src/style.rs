@@ -53,8 +53,8 @@ pub fn font_family(spec: &FontSpec) -> &'static str {
     }
 }
 
-use objc2::AnyThread;
 use objc2::rc::Retained;
+use objc2::AnyThread;
 use objc2_app_kit::{NSBezierPath, NSColor, NSFont, NSGradient};
 
 /// Map a CSS-style `FontSpec` weight to an AppKit font weight value.

@@ -509,128 +509,298 @@ pub fn terminal_font() -> FontSpec {
 
 // Text colors
 pub fn title_color() -> Color {
-    Color { r: 248, g: 250, b: 252, a: 1.0 }
+    Color {
+        r: 248,
+        g: 250,
+        b: 252,
+        a: 1.0,
+    }
 }
 
 pub fn headline_color() -> Color {
-    Color { r: 248, g: 250, b: 252, a: 1.0 }
+    Color {
+        r: 248,
+        g: 250,
+        b: 252,
+        a: 1.0,
+    }
 }
 
 pub fn detail_color() -> Color {
-    Color { r: 226, g: 234, b: 242, a: 0.94 }
+    Color {
+        r: 226,
+        g: 234,
+        b: 242,
+        a: 0.94,
+    }
 }
 
 pub fn subtitle_color() -> Color {
-    Color { r: 196, g: 208, b: 222, a: 0.66 }
+    Color {
+        r: 196,
+        g: 208,
+        b: 222,
+        a: 0.66,
+    }
 }
 
 pub fn recency_color() -> Color {
-    Color { r: 188, g: 201, b: 216, a: 0.88 }
+    Color {
+        r: 188,
+        g: 201,
+        b: 216,
+        a: 0.88,
+    }
 }
 
 pub fn alert_color() -> Color {
-    Color { r: 202, g: 214, b: 227, a: 0.78 }
+    Color {
+        r: 202,
+        g: 214,
+        b: 227,
+        a: 0.78,
+    }
 }
 
 pub fn scrollback_line_color() -> Color {
-    Color { r: 202, g: 214, b: 227, a: 0.88 }
+    Color {
+        r: 202,
+        g: 214,
+        b: 227,
+        a: 0.88,
+    }
 }
 
 pub fn evidence_text_color() -> Color {
-    Color { r: 198, g: 212, b: 227, a: 0.88 }
+    Color {
+        r: 198,
+        g: 212,
+        b: 227,
+        a: 0.88,
+    }
 }
 
 pub fn bar_caption_color() -> Color {
-    Color { r: 186, g: 200, b: 214, a: 0.62 }
+    Color {
+        r: 186,
+        g: 200,
+        b: 214,
+        a: 0.62,
+    }
 }
 
 pub fn bar_reason_color() -> Color {
-    Color { r: 186, g: 200, b: 214, a: 0.56 }
+    Color {
+        r: 186,
+        g: 200,
+        b: 214,
+        a: 0.56,
+    }
 }
 
 // Structural colors
 pub fn bar_empty_color() -> Color {
-    Color { r: 163, g: 175, b: 194, a: 0.14 }
+    Color {
+        r: 163,
+        g: 175,
+        b: 194,
+        a: 0.14,
+    }
 }
 
 pub fn selected_card_border() -> Color {
-    Color { r: 113, g: 197, b: 255, a: 0.98 }
+    Color {
+        r: 113,
+        g: 197,
+        b: 255,
+        a: 0.98,
+    }
 }
 
 pub fn transcript_bg() -> Color {
-    Color { r: 8, g: 14, b: 22, a: 0.34 }
+    Color {
+        r: 8,
+        g: 14,
+        b: 22,
+        a: 0.34,
+    }
 }
 
 pub fn transcript_border() -> Color {
-    Color { r: 173, g: 188, b: 204, a: 0.08 }
+    Color {
+        r: 173,
+        g: 188,
+        b: 204,
+        a: 0.08,
+    }
 }
 
 // Bar gradients
 pub fn bar_calm_gradient() -> Gradient {
     Gradient {
-        top: Color { r: 110, g: 231, b: 183, a: 0.88 },
-        bottom: Color { r: 52, g: 211, b: 153, a: 0.92 },
+        top: Color {
+            r: 110,
+            g: 231,
+            b: 183,
+            a: 0.88,
+        },
+        bottom: Color {
+            r: 52,
+            g: 211,
+            b: 153,
+            a: 0.92,
+        },
     }
 }
 
 pub fn bar_watch_gradient() -> Gradient {
     Gradient {
-        top: Color { r: 250, g: 204, b: 21, a: 0.88 },
-        bottom: Color { r: 251, g: 146, b: 60, a: 0.92 },
+        top: Color {
+            r: 250,
+            g: 204,
+            b: 21,
+            a: 0.88,
+        },
+        bottom: Color {
+            r: 251,
+            g: 146,
+            b: 60,
+            a: 0.92,
+        },
     }
 }
 
 pub fn bar_alert_gradient() -> Gradient {
     Gradient {
-        top: Color { r: 248, g: 113, b: 113, a: 0.9 },
-        bottom: Color { r: 239, g: 68, b: 68, a: 0.94 },
+        top: Color {
+            r: 248,
+            g: 113,
+            b: 113,
+            a: 0.9,
+        },
+        bottom: Color {
+            r: 239,
+            g: 68,
+            b: 68,
+            a: 0.94,
+        },
     }
 }
 
 // Attention chip backgrounds (by fill level 1-5)
 pub fn attention_chip_bg(fill: usize) -> Color {
     match fill.clamp(1, 5) {
-        1 => Color { r: 17, g: 88, b: 51, a: 0.24 },
-        2 => Color { r: 33, g: 82, b: 145, a: 0.22 },
-        3 => Color { r: 120, g: 87, b: 10, a: 0.22 },
-        4 => Color { r: 114, g: 28, b: 35, a: 0.24 },
-        _ => Color { r: 130, g: 35, b: 35, a: 0.32 },
+        1 => Color {
+            r: 17,
+            g: 88,
+            b: 51,
+            a: 0.24,
+        },
+        2 => Color {
+            r: 33,
+            g: 82,
+            b: 145,
+            a: 0.22,
+        },
+        3 => Color {
+            r: 120,
+            g: 87,
+            b: 10,
+            a: 0.22,
+        },
+        4 => Color {
+            r: 114,
+            g: 28,
+            b: 35,
+            a: 0.24,
+        },
+        _ => Color {
+            r: 130,
+            g: 35,
+            b: 35,
+            a: 0.32,
+        },
     }
 }
 
 // Nudge state colors (text, background)
 pub fn nudge_off_colors() -> (Color, Color) {
     (
-        Color { r: 214, g: 222, b: 230, a: 0.84 },
-        Color { r: 84, g: 97, b: 112, a: 0.18 },
+        Color {
+            r: 214,
+            g: 222,
+            b: 230,
+            a: 0.84,
+        },
+        Color {
+            r: 84,
+            g: 97,
+            b: 112,
+            a: 0.18,
+        },
     )
 }
 
 pub fn nudge_armed_colors() -> (Color, Color) {
     (
-        Color { r: 253, g: 230, b: 138, a: 1.0 },
-        Color { r: 120, g: 87, b: 10, a: 0.22 },
+        Color {
+            r: 253,
+            g: 230,
+            b: 138,
+            a: 1.0,
+        },
+        Color {
+            r: 120,
+            g: 87,
+            b: 10,
+            a: 0.22,
+        },
     )
 }
 
 pub fn nudge_cooldown_colors() -> (Color, Color) {
     (
-        Color { r: 147, g: 197, b: 253, a: 1.0 },
-        Color { r: 33, g: 82, b: 145, a: 0.22 },
+        Color {
+            r: 147,
+            g: 197,
+            b: 253,
+            a: 1.0,
+        },
+        Color {
+            r: 33,
+            g: 82,
+            b: 145,
+            a: 0.22,
+        },
     )
 }
 
 // Focus view
 pub fn focus_background() -> Color {
-    Color { r: 5, g: 10, b: 18, a: 1.0 }
+    Color {
+        r: 5,
+        g: 10,
+        b: 18,
+        a: 1.0,
+    }
 }
 
 pub fn focus_card_border() -> Color {
-    Color { r: 18, g: 46, b: 64, a: 1.0 }
+    Color {
+        r: 18,
+        g: 46,
+        b: 64,
+        a: 1.0,
+    }
 }
 
 pub fn focus_terminal_slot_bg() -> Color {
-    Color { r: 4, g: 8, b: 12, a: 0.94 }
+    Color {
+        r: 4,
+        g: 8,
+        b: 12,
+        a: 0.94,
+    }
 }
 
 // Control chips (focus rail cards)
@@ -647,37 +817,92 @@ pub fn control_chip_state_font() -> FontSpec {
 /// Returns (text, background, border) for the Off control state.
 pub fn control_off_colors() -> (Color, Color, Color) {
     (
-        Color { r: 214, g: 222, b: 230, a: 0.84 },
-        Color { r: 84, g: 97, b: 112, a: 0.18 },
-        Color { r: 163, g: 175, b: 194, a: 0.16 },
+        Color {
+            r: 214,
+            g: 222,
+            b: 230,
+            a: 0.84,
+        },
+        Color {
+            r: 84,
+            g: 97,
+            b: 112,
+            a: 0.18,
+        },
+        Color {
+            r: 163,
+            g: 175,
+            b: 194,
+            a: 0.16,
+        },
     )
 }
 
 /// Returns (text, background, border) for the Armed control state.
 pub fn control_armed_colors() -> (Color, Color, Color) {
     (
-        Color { r: 253, g: 230, b: 138, a: 1.0 },
-        Color { r: 120, g: 87, b: 10, a: 0.22 },
-        Color { r: 250, g: 204, b: 21, a: 0.22 },
+        Color {
+            r: 253,
+            g: 230,
+            b: 138,
+            a: 1.0,
+        },
+        Color {
+            r: 120,
+            g: 87,
+            b: 10,
+            a: 0.22,
+        },
+        Color {
+            r: 250,
+            g: 204,
+            b: 21,
+            a: 0.22,
+        },
     )
 }
 
 /// Returns (text, background, border) for the Cooldown control state.
 pub fn control_cooldown_colors() -> (Color, Color, Color) {
     (
-        Color { r: 147, g: 197, b: 253, a: 1.0 },
-        Color { r: 33, g: 82, b: 145, a: 0.22 },
-        Color { r: 96, g: 165, b: 250, a: 0.2 },
+        Color {
+            r: 147,
+            g: 197,
+            b: 253,
+            a: 1.0,
+        },
+        Color {
+            r: 33,
+            g: 82,
+            b: 145,
+            a: 0.22,
+        },
+        Color {
+            r: 96,
+            g: 165,
+            b: 250,
+            a: 0.2,
+        },
     )
 }
 
 // Status bar
 pub fn status_bar_bg() -> Color {
-    Color { r: 5, g: 10, b: 18, a: 0.96 }
+    Color {
+        r: 5,
+        g: 10,
+        b: 18,
+        a: 0.96,
+    }
 }
 
 pub fn status_bar_text_color() -> Color {
-    Color { r: 196, g: 208, b: 222, a: 0.78 }
+    Color {
+        r: 196,
+        g: 208,
+        b: 222,
+        a: 0.78,
+    }
 }
 
 pub fn terminal_foreground_color() -> Color {

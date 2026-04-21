@@ -1,0 +1,21 @@
+[package]
+name = "exaterm-ui-tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+exaterm-ui = { path = "../exaterm-ui" }
+exaterm-test-util = { path = "../exaterm-test-util" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+exaterm-gtk = { path = "../exaterm-gtk", features = ["test-support"] }
+glasscheck = { git = "https://github.com/djspiewak/glasscheck.git", rev = "31d682f9c94e285659b282b5881ca9468a0fb736", features = ["gtk"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+exaterm-macos = { path = "../exaterm-macos", default-features = false, features = ["test-support"] }
+glasscheck = { git = "https://github.com/djspiewak/glasscheck.git", rev = "31d682f9c94e285659b282b5881ca9468a0fb736", features = ["appkit"] }
+objc2-foundation = { version = "0.3", features = ["NSThread"] }
+
+[[test]]
+name = "ui_glasscheck"
+harness = false

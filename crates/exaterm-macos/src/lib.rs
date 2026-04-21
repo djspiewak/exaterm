@@ -1,5 +1,9 @@
 #[cfg(target_os = "macos")]
+pub mod app_state;
+#[cfg(target_os = "macos")]
 pub mod battlefield_view;
+#[cfg(target_os = "macos")]
+pub mod empty_state_view;
 #[cfg(target_os = "macos")]
 pub mod focus_view;
 #[cfg(target_os = "macos")]
@@ -7,6 +11,9 @@ pub mod style;
 #[cfg(target_os = "macos")]
 pub mod terminal_view;
 #[cfg(target_os = "macos")]
+#[cfg(feature = "test-support")]
+pub mod test_support;
+#[cfg(target_os = "macos")]
 pub mod window;
 #[cfg(target_os = "macos")]
-pub mod app_state;
+pub mod workspace_support;

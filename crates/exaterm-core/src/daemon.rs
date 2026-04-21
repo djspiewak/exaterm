@@ -1,20 +1,20 @@
-use crate::file_watch::{RepoWatchHandle, spawn_repo_watch};
-use crate::model::{SessionId, SessionLaunch, WorkspaceStore, user_shell_launch};
+use crate::file_watch::{spawn_repo_watch, RepoWatchHandle};
+use crate::model::{user_shell_launch, SessionId, SessionLaunch, WorkspaceStore};
 use crate::observation::{
-    SessionObservation, apply_file_activity, apply_observation_refresh, apply_stream_update,
-    build_naming_evidence, build_nudge_evidence, build_tactical_evidence, clear_file_activity,
+    apply_file_activity, apply_observation_refresh, apply_stream_update, build_naming_evidence,
+    build_nudge_evidence, build_tactical_evidence, clear_file_activity,
     compute_observation_refresh, find_git_worktree_root, is_bare_waiting_shell,
-    record_terminal_input_activity,
+    record_terminal_input_activity, SessionObservation,
 };
 use crate::proto::{
     ClientMessage, ObservationSnapshot, ServerMessage, SessionSnapshot, WorkspaceSnapshot,
 };
-use crate::runtime::{RuntimeEvent, SessionRuntime, spawn_headless_runtime};
+use crate::runtime::{spawn_headless_runtime, RuntimeEvent, SessionRuntime};
 use crate::synthesis::{
-    NameSuggestion, NamingEvidence, NudgeEvidence, NudgeSuggestion, ProviderCallResult,
-    ProviderPreferences, SynthesisBackendRegistry, TacticalState, TacticalSynthesis,
     name_signature, nudge_signature, should_skip_repeated_paused_summary, summary_signature,
-    summary_substantive_signature,
+    summary_substantive_signature, NameSuggestion, NamingEvidence, NudgeEvidence, NudgeSuggestion,
+    ProviderCallResult, ProviderPreferences, SynthesisBackendRegistry, TacticalState,
+    TacticalSynthesis,
 };
 use portable_pty::PtySize;
 use serde::Serialize;
@@ -2113,30 +2113,24 @@ mod tests {
 
         let changed = drain_worker_results(&mut state);
         assert!(!changed);
-        assert!(
-            state
-                .summary_cache
-                .get(&SessionId(1))
-                .unwrap()
-                .skipped_providers
-                .contains_key(&crate::synthesis::SynthesisProvider::OpenAi)
-        );
-        assert!(
-            state
-                .naming_cache
-                .get(&SessionId(2))
-                .unwrap()
-                .skipped_providers
-                .contains_key(&crate::synthesis::SynthesisProvider::ClaudeCli)
-        );
-        assert!(
-            state
-                .nudge_cache
-                .get(&SessionId(3))
-                .unwrap()
-                .skipped_providers
-                .contains_key(&crate::synthesis::SynthesisProvider::CodexCli)
-        );
+        assert!(state
+            .summary_cache
+            .get(&SessionId(1))
+            .unwrap()
+            .skipped_providers
+            .contains_key(&crate::synthesis::SynthesisProvider::OpenAi));
+        assert!(state
+            .naming_cache
+            .get(&SessionId(2))
+            .unwrap()
+            .skipped_providers
+            .contains_key(&crate::synthesis::SynthesisProvider::ClaudeCli));
+        assert!(state
+            .nudge_cache
+            .get(&SessionId(3))
+            .unwrap()
+            .skipped_providers
+            .contains_key(&crate::synthesis::SynthesisProvider::CodexCli));
     }
 
     #[test]

@@ -7,4 +7,5 @@ pub mod presentation;
 pub mod supervision;
 pub mod terminal;
 pub mod theme;
+pub mod ui_test_contract;
 pub mod workspace_view;

@@ -16,7 +16,11 @@ impl RgbaImage {
     #[allow(clippy::arithmetic_side_effects)]
     pub fn new(width: u32, height: u32, data: Vec<u8>) -> Self {
         debug_assert_eq!(data.len(), (width as usize) * (height as usize) * 4);
-        Self { width, height, data }
+        Self {
+            width,
+            height,
+            data,
+        }
     }
 }
 
@@ -174,8 +178,10 @@ pub fn compare(actual: &RgbaImage, expected: &RgbaImage, config: &CompareConfig)
         let diff_b = actual_b.abs_diff(expect_b);
         let diff_a = actual_a.abs_diff(expect_a);
 
-        let is_match =
-            diff_r <= tolerance && diff_g <= tolerance && diff_b <= tolerance && diff_a <= tolerance;
+        let is_match = diff_r <= tolerance
+            && diff_g <= tolerance
+            && diff_b <= tolerance
+            && diff_a <= tolerance;
 
         if !is_match {
             mismatched += 1;
@@ -366,7 +372,7 @@ pub fn bright_pixel_fraction(image: &RgbaImage, luminance_threshold: f64) -> f64
     clippy::expect_used,
     clippy::indexing_slicing,
     clippy::arithmetic_side_effects,
-    clippy::cast_possible_truncation,
+    clippy::cast_possible_truncation
 )]
 mod tests {
     use super::*;
@@ -489,8 +495,8 @@ mod tests {
             width: 3,
             height: 2,
             data: vec![
-                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 128, 128, 128, 255, 0, 0, 0,
-                255, 255, 255, 255, 255,
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 128, 128, 128, 255, 0, 0, 0, 255,
+                255, 255, 255, 255,
             ],
         };
         let dir = crate::test_tempdir();

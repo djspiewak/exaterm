@@ -2,17 +2,17 @@ use exaterm_types::model::SessionId;
 use exaterm_types::proto::ClientMessage;
 use objc2::rc::Retained;
 use objc2::runtime::NSObject;
-use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSAlertSecondButtonReturn, NSAlertStyle, NSApplication,
     NSApplicationDelegate, NSApplicationTerminateReply,
 };
-use objc2_foundation::NSObjectProtocol;
 use objc2_foundation::ns_string;
+use objc2_foundation::NSObjectProtocol;
 use std::cell::RefCell;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 
 thread_local! {
     static CMD_SENDER: RefCell<Option<mpsc::Sender<ClientMessage>>> = const { RefCell::new(None) };
