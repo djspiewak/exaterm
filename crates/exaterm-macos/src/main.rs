@@ -429,6 +429,16 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
         move |event: std::ptr::NonNull<objc2_app_kit::NSEvent>| -> *mut objc2_app_kit::NSEvent {
             // SAFETY: The event pointer is valid for the duration of this callback.
             let event_ref = unsafe { event.as_ref() };
+
+            // Don't intercept events when a modal window (e.g. the exit dialog) is running.
+            let mtm = MainThreadMarker::new().expect("main thread");
+            if objc2_app_kit::NSApplication::sharedApplication(mtm)
+                .modalWindow()
+                .is_some()
+            {
+                return event.as_ptr();
+            }
+
             let key_code = event_ref.keyCode();
             let flags = event_ref.modifierFlags();
 
