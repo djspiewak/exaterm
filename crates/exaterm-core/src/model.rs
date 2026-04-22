@@ -4,6 +4,8 @@ pub use exaterm_types::model::{
 
 use std::path::Path;
 
+use libc;
+
 pub fn shell_launch(
     name: impl Into<String>,
     subtitle: impl Into<String>,
@@ -177,17 +179,68 @@ pub fn session_status_hint(launch: &SessionLaunch, status: SessionStatus) -> Str
     }
 }
 
+#[derive(Clone, Copy)]
+enum ShellHostOs {
+    MacOs,
+    Other,
+}
+
 fn preferred_user_shell_launch() -> (String, Vec<String>) {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
-    let shell_name = Path::new(&shell)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("bash");
-
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let user = current_username();
     let mode = std::env::var("EXATERM_SHELL_MODE").unwrap_or_else(|_| "login".into());
-    let args = preferred_user_shell_args(shell_name, &mode);
+    let os = if cfg!(target_os = "macos") {
+        ShellHostOs::MacOs
+    } else {
+        ShellHostOs::Other
+    };
+    build_user_shell_launch(os, &shell, &user, &mode)
+}
 
-    (shell, args)
+fn build_user_shell_launch(
+    os: ShellHostOs,
+    shell_path: &str,
+    user: &str,
+    mode: &str,
+) -> (String, Vec<String>) {
+    match os {
+        ShellHostOs::MacOs => {
+            // Use macOS default shell (zsh since Catalina) when $SHELL is unset.
+            let shell = if shell_path.is_empty() {
+                "/bin/zsh".to_string()
+            } else {
+                shell_path.to_string()
+            };
+            if mode == "login" {
+                // Mirror Terminal.app: spawn via login(1) so argv[0] gets the leading dash,
+                // PAM login stack runs, and utmpx accounting is recorded.
+                // -f skip auth, -p preserve env (matches Terminal.app), -q silence banner.
+                // Known limitation: login -p inherits parent env, so shell-state vars like
+                // __PROFILE_SOURCED=1 from a dev-mode `make run` shell will leak into the child
+                // and cause re-entrance guards in ~/.profile to short-circuit. Launch exaterm
+                // from Finder/Dock (launchd parent) to get a clean env.
+                (
+                    "/usr/bin/login".to_string(),
+                    vec!["-fpq".into(), user.into(), shell],
+                )
+            } else {
+                (shell, vec!["-i".into()])
+            }
+        }
+        ShellHostOs::Other => {
+            let shell = if shell_path.is_empty() {
+                "/bin/bash".to_string()
+            } else {
+                shell_path.to_string()
+            };
+            let shell_name = Path::new(&shell)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("bash");
+            let args = preferred_user_shell_args(shell_name, mode);
+            (shell, args)
+        }
+    }
 }
 
 fn preferred_user_shell_args(shell_name: &str, mode: &str) -> Vec<String> {
@@ -200,6 +253,23 @@ fn preferred_user_shell_args(shell_name: &str, mode: &str) -> Vec<String> {
         ("fish", _) => vec!["--interactive".into()],
         (_, _) => vec!["-i".into()],
     }
+}
+
+fn current_username() -> String {
+    if let Ok(u) = std::env::var("USER") {
+        if !u.is_empty() {
+            return u;
+        }
+    }
+    unsafe {
+        let pw = libc::getpwuid(libc::getuid());
+        if !pw.is_null() && !(*pw).pw_name.is_null() {
+            if let Ok(s) = std::ffi::CStr::from_ptr((*pw).pw_name).to_str() {
+                return s.to_string();
+            }
+        }
+    }
+    "root".into()
 }
 
 #[derive(Debug, Default)]
@@ -332,8 +402,9 @@ impl WorkspaceStore {
 #[cfg(test)]
 mod tests {
     use super::{
-        blocking_prompt_launch, launch_argv, preferred_user_shell_args, session_status_hint,
-        shell_launch, ssh_shell_launch, user_shell_launch, SessionStatus, WorkspaceStore,
+        blocking_prompt_launch, build_user_shell_launch, current_username, launch_argv,
+        preferred_user_shell_args, session_status_hint, shell_launch, ssh_shell_launch,
+        user_shell_launch, SessionStatus, ShellHostOs, WorkspaceStore,
     };
 
     #[test]
@@ -407,5 +478,67 @@ mod tests {
             preferred_user_shell_args("fish", "login"),
             vec!["--interactive", "--login"]
         );
+    }
+
+    #[test]
+    fn macos_login_mode_uses_login_wrapper() {
+        let (prog, args) = build_user_shell_launch(
+            ShellHostOs::MacOs,
+            "/opt/homebrew/bin/bash",
+            "alice",
+            "login",
+        );
+        assert_eq!(prog, "/usr/bin/login");
+        assert_eq!(args, vec!["-fpq", "alice", "/opt/homebrew/bin/bash"]);
+    }
+
+    #[test]
+    fn macos_interactive_mode_skips_wrapper() {
+        let (prog, args) =
+            build_user_shell_launch(ShellHostOs::MacOs, "/bin/zsh", "alice", "interactive");
+        assert_eq!(prog, "/bin/zsh");
+        assert_eq!(args, vec!["-i"]);
+    }
+
+    #[test]
+    fn macos_defaults_to_zsh_when_shell_unset() {
+        let (prog, args) = build_user_shell_launch(ShellHostOs::MacOs, "", "alice", "login");
+        assert_eq!(prog, "/usr/bin/login");
+        assert_eq!(args, vec!["-fpq", "alice", "/bin/zsh"]);
+    }
+
+    #[test]
+    fn linux_login_mode_preserves_existing_args() {
+        let (prog, args) =
+            build_user_shell_launch(ShellHostOs::Other, "/bin/bash", "alice", "login");
+        assert_eq!(prog, "/bin/bash");
+        assert_eq!(args, vec!["-il"]);
+    }
+
+    #[test]
+    fn linux_interactive_mode_preserves_existing_args() {
+        let (prog, args) =
+            build_user_shell_launch(ShellHostOs::Other, "/usr/bin/fish", "alice", "interactive");
+        assert_eq!(prog, "/usr/bin/fish");
+        assert_eq!(args, vec!["--interactive"]);
+    }
+
+    #[test]
+    fn current_username_prefers_user_env() {
+        // Temporarily override $USER; restore on drop.
+        let _guard = {
+            struct Guard(Option<String>);
+            impl Drop for Guard {
+                fn drop(&mut self) {
+                    match &self.0 {
+                        Some(v) => std::env::set_var("USER", v),
+                        None => std::env::remove_var("USER"),
+                    }
+                }
+            }
+            Guard(std::env::var("USER").ok())
+        };
+        std::env::set_var("USER", "probe");
+        assert_eq!(current_username(), "probe");
     }
 }

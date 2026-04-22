@@ -2,8 +2,12 @@ UNAME_S := $(shell uname -s)
 
 ifeq ($(UNAME_S),Darwin)
 APP_PACKAGE := exaterm-macos
+# Wipe inherited shell-state vars (e.g. __PROFILE_SOURCED) so the login wrapper
+# sources ~/.profile cleanly, matching a Finder/Dock launch from launchd.
+RUN_ENV := env -i HOME="$$HOME" PATH="$$PATH" USER="$$USER" SHELL="$$SHELL" LOGNAME="$$LOGNAME" TMPDIR="$$TMPDIR" LANG="$$LANG" TERM="$$TERM"
 else
 APP_PACKAGE := exaterm-gtk
+RUN_ENV :=
 endif
 
 .PHONY: all build build-app build-gtk build-macos run run-app run-gtk run-macos daemon check test test-workspace core-test core-check daemon-check clean help
@@ -25,13 +29,13 @@ build-macos:
 run: run-app
 
 run-app: build-app
-	cargo run -p $(APP_PACKAGE)
+	$(RUN_ENV) cargo run -p $(APP_PACKAGE)
 
 run-gtk: build-gtk
 	cargo run -p exaterm-gtk
 
 run-macos: build-macos
-	cargo run -p exaterm-macos
+	$(RUN_ENV) cargo run -p exaterm-macos
 
 daemon:
 	cargo run -p exatermd
