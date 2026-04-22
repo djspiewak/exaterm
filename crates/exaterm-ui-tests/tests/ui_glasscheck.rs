@@ -9,7 +9,7 @@ mod imp {
     #[cfg(target_os = "linux")]
     use exaterm_gtk::test_support::{mount_scenario, MountedGtkUi as MountedUi};
     #[cfg(target_os = "macos")]
-    use exaterm_macos::test_support::{mount_scenario, MountedAppKitUi as MountedUi};
+    use exaterm_macos::test_support::{mount_scenario, mount_with_terminal, MountedAppKitUi as MountedUi};
     #[cfg(target_os = "macos")]
     use objc2_foundation::MainThreadMarker;
 
@@ -26,6 +26,11 @@ mod imp {
         run("battlefield_click_enters_focus", battlefield_click_enters_focus);
         run("focus_exit", focus_exit);
         run("focus_switches_sessions", focus_switches_sessions);
+        #[cfg(target_os = "macos")]
+        run(
+            "return_key_executes_embedded_terminal_command",
+            return_key_executes_embedded_terminal_command,
+        );
     }
 
     fn run(name: &str, test: impl FnOnce()) {
@@ -497,6 +502,41 @@ mod imp {
             &selector(&selectors::focus_card(UiSessionKey::Shell2)),
         )
         .unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    fn return_key_executes_embedded_terminal_command() {
+        use objc2_app_kit::NSEventModifierFlags;
+
+        let mtm = MainThreadMarker::new().expect("main thread");
+        let harness = glasscheck::Harness::new(mtm);
+        let mounted = mount_with_terminal(&harness)
+            .expect("mount_with_terminal should succeed");
+
+        // Send Return (key code 36) through the queued path so it flows through the
+        // AppKit local event monitor before reaching SwiftTerm as first responder.
+        //
+        // If the bug is present (monitor consumes key 36), SwiftTerm never receives
+        // the event, the input handler is never called, and received_bytes stays empty.
+        // With the fix (monitor passes key 36 through), SwiftTerm calls the input handler
+        // with the Return bytes.
+        mounted
+            .host
+            .input()
+            .key_press_raw_queued(36, NSEventModifierFlags::empty(), "\r")
+            .expect("key_press_raw_queued should succeed");
+
+        harness.settle(2);
+
+        let bytes = mounted.received_bytes.borrow();
+        assert!(
+            bytes.contains(&b'\r') || bytes.contains(&b'\n'),
+            "Return key (code 36) should have been dispatched to the embedded terminal \
+             input handler, but no carriage-return or newline was received.\n\
+             Received bytes: {bytes:?}\n\
+             This test fails when the event monitor consumes key code 36 instead of \
+             passing it through to SwiftTerm."
+        );
     }
 
     fn mounted(scenario: UiTestScenario) -> (glasscheck::Harness, MountedUi) {

@@ -1,6 +1,7 @@
 #[cfg(target_os = "macos")]
 mod imp {
     use std::cell::RefCell;
+    use std::collections::BTreeMap;
     use std::rc::Rc;
 
     use exaterm_types::model::SessionId;
@@ -36,6 +37,86 @@ mod imp {
 
     pub struct MountedAppKitUi {
         pub host: WindowHost,
+    }
+
+    /// A mounted UI fixture that includes a live TerminalBridge wired to a key monitor.
+    /// Used to test keyboard dispatch through the AppKit local event monitor.
+    pub struct MountedAppKitUiWithTerminal {
+        pub host: WindowHost,
+        /// Bytes delivered to the terminal's input handler (i.e. bytes sent toward the PTY).
+        pub received_bytes: Rc<RefCell<Vec<u8>>>,
+        _key_monitor: crate::key_monitor::KeyMonitorHandle,
+        _bridge: Rc<exaterm_swiftterm::TerminalBridge>,
+    }
+
+    /// Mounts a single-session embedded battlefield scenario with a real TerminalBridge
+    /// and registers the AppKit keyboard event monitor.
+    ///
+    /// The returned `received_bytes` accumulates every byte that SwiftTerm's input
+    /// handler delivers (i.e. keystrokes forwarded toward a PTY). Use it in tests to
+    /// assert that a key event was not consumed by the event monitor.
+    pub fn mount_with_terminal(
+        harness: &Harness,
+    ) -> Result<MountedAppKitUiWithTerminal, MountError> {
+        use objc2_app_kit::NSWindow;
+
+        let fixture = scenario_fixture(UiTestScenario::BattlefieldSingleSparse);
+        let host =
+            harness.create_window(fixture.window_width as f64, fixture.window_height as f64);
+        let content_frame = NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(fixture.window_width as f64, fixture.window_height as f64),
+        );
+        let content_view = NSView::initWithFrame(
+            NSView::alloc(harness.main_thread_marker()),
+            content_frame,
+        );
+
+        let state = Rc::new(RefCell::new(AppState::new()));
+        state.borrow_mut().apply_snapshot(&fixture.snapshot);
+        if let Some(session_id) = fixture.selected_session {
+            state.borrow_mut().workspace.select_session(session_id);
+        }
+
+        let bridge = Rc::new(exaterm_swiftterm::TerminalBridge::new(content_frame));
+        let received = Rc::new(RefCell::new(Vec::<u8>::new()));
+        let received_clone = Rc::clone(&received);
+        bridge.set_input_handler(move |bytes: &[u8]| {
+            received_clone.borrow_mut().extend_from_slice(bytes);
+        });
+
+        let bridge_view = bridge.view();
+        bridge_view.setFrame(content_frame);
+        content_view.addSubview(&bridge_view);
+        host.set_content_view(&content_view);
+
+        let session_id = UiSessionKey::Shell1.session_id();
+        let mut surfaces_map = BTreeMap::new();
+        surfaces_map.insert(session_id, bridge_view.clone());
+        let surfaces = Rc::new(RefCell::new(surfaces_map));
+
+        let window_retained: Retained<NSWindow> = unsafe {
+            Retained::retain(host.window() as *const NSWindow as *mut NSWindow)
+        }
+        .ok_or_else(|| MountError {
+            message: "window retain failed".into(),
+        })?;
+
+        let key_monitor = crate::key_monitor::register_battlefield_key_monitor(
+            Rc::clone(&state),
+            window_retained,
+            surfaces,
+            || {},
+        );
+
+        harness.settle(4);
+
+        Ok(MountedAppKitUiWithTerminal {
+            host,
+            received_bytes: received,
+            _key_monitor: key_monitor,
+            _bridge: bridge,
+        })
     }
 
     pub fn mount_scenario(

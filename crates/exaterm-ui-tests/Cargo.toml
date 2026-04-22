@@ -9,11 +9,12 @@ exaterm-test-util = { path = "../exaterm-test-util" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 exaterm-gtk = { path = "../exaterm-gtk", features = ["test-support"] }
-glasscheck = { git = "https://github.com/djspiewak/glasscheck.git", rev = "31d682f9c94e285659b282b5881ca9468a0fb736", features = ["gtk"] }
+glasscheck = { git = "https://github.com/djspiewak/glasscheck.git", rev = "f71da71f60d318c213c6c17fd51c55ff684b4104", features = ["gtk"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 exaterm-macos = { path = "../exaterm-macos", default-features = false, features = ["test-support"] }
-glasscheck = { git = "https://github.com/djspiewak/glasscheck.git", rev = "31d682f9c94e285659b282b5881ca9468a0fb736", features = ["appkit"] }
+glasscheck = { git = "https://github.com/djspiewak/glasscheck.git", rev = "f71da71f60d318c213c6c17fd51c55ff684b4104", features = ["appkit"] }
+objc2-app-kit = { version = "0.3", features = ["NSEvent"] }
 objc2-foundation = { version = "0.3", features = ["NSThread"] }
 
 [[test]]

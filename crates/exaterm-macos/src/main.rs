@@ -1,8 +1,6 @@
 #[cfg(target_os = "macos")]
 mod app_delegate;
 #[cfg(target_os = "macos")]
-mod key_map;
-#[cfg(target_os = "macos")]
 mod menu;
 #[cfg(target_os = "macos")]
 mod session_io;
@@ -22,7 +20,7 @@ use exaterm_macos::terminal_view;
 #[cfg(target_os = "macos")]
 use exaterm_macos::window;
 #[cfg(target_os = "macos")]
-use exaterm_macos::key_dispatch;
+use exaterm_macos::key_monitor;
 #[cfg(target_os = "macos")]
 use exaterm_macos::workspace_support;
 
@@ -116,6 +114,10 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
     let terminal_surfaces = Rc::new(RefCell::new(BTreeMap::<
         exaterm_types::model::SessionId,
         TerminalSurface,
+    >::new()));
+    let key_surfaces = Rc::new(RefCell::new(BTreeMap::<
+        exaterm_types::model::SessionId,
+        objc2::rc::Retained<objc2_app_kit::NSView>,
     >::new()));
 
     // Create and configure the main window.
@@ -267,6 +269,7 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
 
     let timer_displayed_focus = Rc::clone(&displayed_focus);
     let timer_surfaces = Rc::clone(&terminal_surfaces);
+    let timer_key_surfaces = Rc::clone(&key_surfaces);
     let timer_processors = Rc::clone(&stream_processors);
     let timer_sync_inputs = sync_inputs_enabled.clone();
     let timer_block = block2::StackBlock::new(
@@ -353,6 +356,16 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
                 timer_sync_inputs.clone(),
             );
 
+            // Sync views-only map for the key monitor.
+            {
+                let surfs = timer_surfaces.borrow();
+                let mut key_surfs = timer_key_surfaces.borrow_mut();
+                key_surfs.retain(|id, _| surfs.contains_key(id));
+                for (id, surface) in surfs.iter() {
+                    key_surfs.entry(*id).or_insert_with(|| surface.view.clone());
+                }
+            }
+
             let focused = borrowed.workspace.focused_session();
             {
                 let mut displayed = timer_displayed_focus.borrow_mut();
@@ -431,117 +444,13 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
         )
     };
 
-    // Set up keyboard event monitoring.
-    // In focus mode, SwiftTerm handles input as first responder — we only intercept
-    // Escape (exit focus) and Cmd+N (add shell). In battlefield mode, we handle navigation.
-    let key_state = Rc::clone(&state);
-    let key_window = main_window.clone();
-    let key_surfaces = Rc::clone(&terminal_surfaces);
-    let key_block = block2::StackBlock::new(
-        move |event: std::ptr::NonNull<objc2_app_kit::NSEvent>| -> *mut objc2_app_kit::NSEvent {
-            // SAFETY: The event pointer is valid for the duration of this callback.
-            let event_ref = unsafe { event.as_ref() };
-
-            // Don't intercept events when a modal window (e.g. the exit dialog) is running.
-            let mtm = MainThreadMarker::new().expect("main thread");
-            if objc2_app_kit::NSApplication::sharedApplication(mtm)
-                .modalWindow()
-                .is_some()
-            {
-                return event.as_ptr();
-            }
-
-            let key_code = event_ref.keyCode();
-            let flags = event_ref.modifierFlags();
-
-            let modifiers = key_map::Modifiers {
-                command: flags.contains(objc2_app_kit::NSEventModifierFlags::Command),
-            };
-
-            let in_focus = key_state.borrow().workspace.focused_session().is_some();
-
-            // Cmd+N: add a new shell session (consume, don't pass to menu).
-            if modifiers.command && key_code == 45 {
-                app_delegate::send_add_terminals();
-                return std::ptr::null_mut();
-            }
-
-            // Let other Cmd+key combos through to the menu system.
-            if modifiers.command {
-                return event.as_ptr();
-            }
-
-            // Battlefield mode keyboard handling.
-            if !in_focus {
-                let selected_embedded = key_window.contentView().is_some_and(|content| {
-                    battlefield_embeds_selected_terminal(&key_state.borrow(), content.frame())
-                });
-                if selected_embedded {
-                    let selected = key_state.borrow().workspace.selected_session();
-                    if let Some(session_id) = selected {
-                        if let Some(surface) = key_surfaces.borrow().get(&session_id) {
-                            if key_code == 36 {
-                                key_window.makeFirstResponder(Some(&*surface.view));
-                            }
-                            return match key_dispatch::embedded_terminal_key_action(key_code) {
-                                key_dispatch::KeyAction::PassThrough => event.as_ptr(),
-                                key_dispatch::KeyAction::Consume => std::ptr::null_mut(),
-                            };
-                        }
-                    }
-                }
-
-                match key_code {
-                    // Enter: focus the selected session.
-                    36 => {
-                        let selected = key_state.borrow().workspace.selected_session();
-                        if let Some(session_id) = selected {
-                            key_state
-                                .borrow_mut()
-                                .workspace
-                                .enter_focus_mode(session_id);
-                            if let Some(surface) = key_surfaces.borrow().get(&session_id) {
-                                key_window.makeFirstResponder(Some(&*surface.view));
-                            }
-                        }
-                        return std::ptr::null_mut();
-                    }
-                    // Up arrow: select previous session.
-                    126 => {
-                        key_state.borrow_mut().select_previous_session();
-                        return std::ptr::null_mut();
-                    }
-                    // Down arrow: select next session.
-                    125 => {
-                        key_state.borrow_mut().select_next_session();
-                        return std::ptr::null_mut();
-                    }
-                    _ => {
-                        // Consume everything else to prevent beeps.
-                        return std::ptr::null_mut();
-                    }
-                }
-            }
-
-            // Focus mode: Escape returns to battlefield.
-            if in_focus && key_code == 53 {
-                key_state.borrow_mut().workspace.return_to_battlefield();
-                key_window.makeFirstResponder(None);
-                return std::ptr::null_mut();
-            }
-
-            // Focus mode: let SwiftTerm handle all other keys as first responder.
-            // Pass the event through to the responder chain.
-            event.as_ptr()
-        },
+    // Set up keyboard event monitoring via the shared library function.
+    let _key_monitor = key_monitor::register_battlefield_key_monitor(
+        Rc::clone(&state),
+        main_window.clone(),
+        Rc::clone(&key_surfaces),
+        app_delegate::send_add_terminals,
     );
-
-    let _key_monitor = unsafe {
-        objc2_app_kit::NSEvent::addLocalMonitorForEventsMatchingMask_handler(
-            objc2_app_kit::NSEventMask::KeyDown,
-            &key_block,
-        )
-    };
 
     // Defer window show and activation into applicationDidFinishLaunching so they are
     // delivered while the run loop is processing events. Calling these before app.run()
@@ -566,6 +475,8 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
     std::mem::forget(session_ios);
     std::mem::forget(sync_inputs_enabled);
     std::mem::forget(terminal_surfaces);
+    std::mem::forget(key_surfaces);
+    std::mem::forget(_key_monitor);
 
     app.run();
 }
@@ -594,22 +505,6 @@ fn terminal_appearance() -> exaterm_swiftterm::TerminalAppearance {
         background: exaterm_ui::theme::terminal_background_color(),
         cursor: exaterm_ui::theme::terminal_cursor_color(),
     }
-}
-
-#[cfg(target_os = "macos")]
-fn battlefield_embeds_selected_terminal(
-    state: &app_state::AppState,
-    content_frame: NSRect,
-) -> bool {
-    let Some(session_id) = state.workspace.selected_session() else {
-        return false;
-    };
-    workspace_support::embedded_session_ids(
-        &state.card_render_data(),
-        content_frame,
-        state.workspace.focused_session(),
-    )
-    .contains(&session_id)
 }
 
 #[cfg(target_os = "macos")]
