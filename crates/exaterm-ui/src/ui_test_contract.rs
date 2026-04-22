@@ -11,6 +11,27 @@ pub enum UiTestScenario {
     BattlefieldSingleSparse,
     BattlefieldSingleSummarized,
     BattlefieldFourMixed,
+    /// A single session at a window size that embeds a terminal on both platforms.
+    /// Used for scrollback-band TUI tests (claude, codex, synthetic).
+    BattlefieldSingleTuiActive,
+}
+
+/// Synthetic alt-screen paint sequence (claude-like): enters alternate screen,
+/// clears, positions cursor, writes recognizable TUI frame rows.
+pub const TUI_SMCUP_PAINT: &[u8] =
+    b"\x1b[?1049h\x1b[2J\x1b[1;1H\xe2\x94\x8c\xe2\x94\x80 TUI-MARKER \xe2\x94\x80\xe2\x94\x90\x1b[2;1H\xe2\x94\x82 Hello, world!            \xe2\x94\x82\x1b[3;1H\xe2\x94\x94\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x98";
+
+/// Synthetic cooked-echo sequence (codex-like): prompt, user input, newline, output.
+pub const TUI_COOKED_ECHO: &[u8] = b"$ codex\r\ncodex output line 1\r\ncodex output line 2\r\n$ ";
+
+/// Real byte capture from a `claude` session (use `script -q /dev/null -c claude`).
+pub fn claude_session_bytes() -> &'static [u8] {
+    include_bytes!("../test_fixtures/claude_session.bin")
+}
+
+/// Real byte capture from a `codex` session (use `script -q /dev/null -c codex`).
+pub fn codex_session_bytes() -> &'static [u8] {
+    include_bytes!("../test_fixtures/codex_session.bin")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -179,6 +200,26 @@ pub fn scenario_fixture(scenario: UiTestScenario) -> UiScenarioFixture {
             selected_session: Some(UiSessionKey::Shell1.session_id()),
             window_width: 1480,
             window_height: 960,
+        },
+        UiTestScenario::BattlefieldSingleTuiActive => UiScenarioFixture {
+            snapshot: WorkspaceSnapshot {
+                sessions: vec![session_snapshot(
+                    UiSessionKey::Shell1,
+                    "Shell 1",
+                    "TUI session",
+                    SessionKind::RunningStream,
+                    SessionStatus::Running,
+                    sparse_observation(&[]),
+                    None,
+                    false,
+                    None,
+                    None,
+                )],
+            },
+            selected_session: Some(UiSessionKey::Shell1.session_id()),
+            // Width < (8*80 + 72) = 712 + 24 = 736 prevents terminal embedding on both platforms.
+            window_width: 700,
+            window_height: 700,
         },
         UiTestScenario::BattlefieldFourMixed => UiScenarioFixture {
             snapshot: WorkspaceSnapshot {

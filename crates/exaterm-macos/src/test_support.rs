@@ -4,6 +4,9 @@ mod imp {
     use std::collections::BTreeMap;
     use std::rc::Rc;
 
+    use exaterm_core::headless_terminal::HeadlessTerminal;
+    use exaterm_core::observation::append_recent_lines;
+    use exaterm_core::terminal_stream::TerminalStreamProcessor;
     use exaterm_types::model::SessionId;
     use exaterm_ui::app_state::{AppState, CardRenderData, FocusRenderData};
     use exaterm_ui::ui_test_contract::{scenario_fixture, selectors, UiSessionKey, UiTestScenario};
@@ -37,6 +40,58 @@ mod imp {
 
     pub struct MountedAppKitUi {
         pub host: WindowHost,
+        state: Rc<RefCell<AppState>>,
+        battlefield_view: Retained<crate::battlefield_view::BattlefieldView>,
+        render_state: Rc<TerminalRenderState>,
+        stream_processors: RefCell<BTreeMap<SessionId, TerminalStreamProcessor>>,
+        headless_terminals: RefCell<BTreeMap<SessionId, HeadlessTerminal>>,
+    }
+
+    impl MountedAppKitUi {
+        /// Feed raw PTY bytes for a session through the stream processor and headless terminal.
+        /// Updates `recent_lines` (and, once §4 lands, `rendered_scrollback`) in the state,
+        /// then triggers a battlefield repaint.
+        pub fn feed_session(&self, session_id: SessionId, bytes: &[u8]) {
+            let update = self
+                .stream_processors
+                .borrow_mut()
+                .entry(session_id)
+                .or_default()
+                .ingest(bytes);
+            let rendered = {
+                let mut map = self.headless_terminals.borrow_mut();
+                let terminal = map.entry(session_id).or_default();
+                terminal.ingest(bytes);
+                terminal.rendered_lines(24)
+            };
+
+            let mut state = self.state.borrow_mut();
+            append_recent_lines(
+                state.recent_lines.entry(session_id).or_default(),
+                &update.semantic_lines,
+            );
+            if !rendered.is_empty() {
+                state.rendered_scrollback.insert(session_id, rendered);
+            }
+            let cards = state.card_render_data();
+            let selected = state.workspace.selected_session();
+            let focused = state.workspace.focused_session();
+            drop(state);
+
+            let embedded_ids = crate::workspace_support::embedded_session_ids(
+                &cards,
+                self.battlefield_view.frame(),
+                focused,
+            );
+            battlefield_view::set_battlefield_data(
+                cards,
+                selected,
+                Rc::clone(&self.render_state),
+                embedded_ids,
+                focused.is_some(),
+            );
+            self.battlefield_view.setNeedsDisplay(true);
+        }
     }
 
     /// A mounted UI fixture that includes a live TerminalBridge wired to a key monitor.
@@ -203,13 +258,20 @@ mod imp {
         host.set_scene_source(Box::new(AppKitSceneSource {
             root: content_view,
             empty_state,
-            battlefield_view,
-            focus_view,
-            state,
+            battlefield_view: battlefield_view.clone(),
+            focus_view: focus_view.clone(),
+            state: Rc::clone(&state),
         }));
         harness.settle(4);
 
-        Ok(MountedAppKitUi { host })
+        Ok(MountedAppKitUi {
+            host,
+            state,
+            battlefield_view,
+            render_state,
+            stream_processors: RefCell::new(BTreeMap::new()),
+            headless_terminals: RefCell::new(BTreeMap::new()),
+        })
     }
 
     fn refresh_views(
@@ -417,6 +479,12 @@ mod imp {
                     ));
                 }
                 if let Some(scrollback) = regions.scrollback {
+                    let scrollback_text = battlefield_view::scrollback_lines(card)
+                        .iter()
+                        .map(|l: &String| l.trim().to_string())
+                        .filter(|l: &String| !l.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n");
                     nodes.push(node(
                         &format!("battlefield-card-scrollback-{}", key.slug()),
                         &selectors::battlefield_card_scrollback(key),
@@ -425,7 +493,11 @@ mod imp {
                             self.battlefield_view.frame(),
                             scrollback,
                         )),
-                        None,
+                        if scrollback_text.is_empty() {
+                            None
+                        } else {
+                            Some(scrollback_text)
+                        },
                     ));
                 }
                 if let Some(terminal_slot) = regions.terminal_slot {
@@ -721,14 +793,14 @@ mod imp {
             return regions;
         }
 
-        let transcript_lines = battlefield_view::transcript_lines(card);
-        if !transcript_lines.is_empty() {
-            let transcript_height = (transcript_lines.len() as f64 * 18.0) + 16.0;
+        let scrollback_lines = battlefield_view::scrollback_lines(card);
+        if !scrollback_lines.is_empty() {
+            let scrollback_height = (scrollback_lines.len() as f64 * 18.0) + 16.0;
             regions.scrollback = Some(NSRect::new(
                 NSPoint::new(card_rect.origin.x + pad_x, y_cursor),
-                NSSize::new(content_width, transcript_height),
+                NSSize::new(content_width, scrollback_height),
             ));
-            y_cursor += transcript_height + 10.0;
+            y_cursor += scrollback_height + 10.0;
         }
 
         if chrome.bars_visible && card.attention_bar.is_some() {

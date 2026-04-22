@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 pub struct SessionObservation {
     pub last_change: Instant,
     pub recent_lines: Vec<String>,
+    pub rendered_scrollback: Vec<String>,
     pub terminal_activity: Vec<TerminalActivityEntry>,
     pub painted_line: Option<String>,
     pub shell_child_command: Option<String>,
@@ -31,6 +32,7 @@ impl SessionObservation {
         Self {
             last_change: Instant::now(),
             recent_lines: Vec::new(),
+            rendered_scrollback: Vec::new(),
             terminal_activity: Vec::new(),
             painted_line: None,
             shell_child_command: None,
@@ -62,6 +64,10 @@ pub fn apply_stream_update(observation: &mut SessionObservation, update: StreamR
     } else if !update.semantic_lines.is_empty() && observation.painted_line.is_none() {
         observation.last_change = Instant::now();
     }
+}
+
+pub fn apply_rendered_scrollback(observation: &mut SessionObservation, lines: &[String]) {
+    observation.rendered_scrollback = lines.to_vec();
 }
 
 pub fn record_terminal_input_activity(observation: &mut SessionObservation) {
@@ -241,6 +247,11 @@ pub fn nudge_terminal_history(observation: &SessionObservation) -> Vec<String> {
 }
 
 pub fn scrollback_fragments(observation: &SessionObservation, limit: usize) -> Vec<String> {
+    if !observation.rendered_scrollback.is_empty() {
+        let lines = &observation.rendered_scrollback;
+        let skip = lines.len().saturating_sub(limit);
+        return lines[skip..].to_vec();
+    }
     observation
         .recent_lines
         .iter()

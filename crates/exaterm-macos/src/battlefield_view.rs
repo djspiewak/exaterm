@@ -406,18 +406,22 @@ fn draw_card(
         return;
     }
 
-    let transcript_lines = transcript_lines(card);
-    if !transcript_lines.is_empty() {
-        let transcript_height = (transcript_lines.len() as f64 * 18.0) + 16.0;
-        draw_transcript_block(
-            rect.x + pad_x,
-            y_cursor,
-            content_width,
-            transcript_height,
-            &transcript_lines,
-            render,
-        );
-        y_cursor += transcript_height + 10.0;
+    let raw_scrollback = scrollback_lines(card);
+    if !raw_scrollback.is_empty() {
+        let scrollback_lines =
+            wrap_lines_to_fit(&raw_scrollback, content_width, render, 8);
+        if !scrollback_lines.is_empty() {
+            let scrollback_height = (scrollback_lines.len() as f64 * 18.0) + 16.0;
+            draw_scrollback_band(
+                rect.x + pad_x,
+                y_cursor,
+                content_width,
+                scrollback_height,
+                &scrollback_lines,
+                render,
+            );
+            y_cursor += scrollback_height + 10.0;
+        }
     }
 
     if chrome.bars_visible {
@@ -513,7 +517,52 @@ fn draw_nudge_chip(
     chip_str.drawAtPoint(NSPoint::new(x + 9.0, y + 3.0));
 }
 
-fn draw_transcript_block(
+/// Wrap `lines` so no display line exceeds `available_width` pixels.
+///
+/// Uses the font's `maximumAdvancement.width` (monospace: all chars identical)
+/// to compute how many characters fit per line.  Lines shorter than the limit
+/// are passed through unchanged; longer lines are split at character boundaries.
+/// The total number of display lines is capped at `max_display_lines`.
+fn wrap_lines_to_fit(
+    lines: &[String],
+    available_width: f64,
+    render: &TerminalRenderState,
+    max_display_lines: usize,
+) -> Vec<String> {
+    const H_PADDING: f64 = 20.0; // 10px each side inside the band
+    let char_width = render.scrollback_font.maximumAdvancement().width.max(1.0);
+    let chars_per_line = ((available_width - H_PADDING) / char_width).floor() as usize;
+    if chars_per_line == 0 {
+        return Vec::new();
+    }
+    let mut result = Vec::new();
+    'outer: for line in lines {
+        let trimmed = line.trim_end();
+        if trimmed.chars().count() <= chars_per_line {
+            result.push(trimmed.to_string());
+        } else {
+            let mut remaining = trimmed;
+            while !remaining.is_empty() {
+                if result.len() >= max_display_lines {
+                    break 'outer;
+                }
+                let split_at = remaining
+                    .char_indices()
+                    .nth(chars_per_line)
+                    .map(|(i, _)| i)
+                    .unwrap_or(remaining.len());
+                result.push(remaining[..split_at].to_string());
+                remaining = &remaining[split_at..];
+            }
+        }
+        if result.len() >= max_display_lines {
+            break;
+        }
+    }
+    result
+}
+
+fn draw_scrollback_band(
     x: f64,
     y: f64,
     width: f64,
@@ -523,9 +572,9 @@ fn draw_transcript_block(
 ) {
     let rect = NSRect::new(NSPoint::new(x, y), NSSize::new(width, height));
     let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, 12.0, 12.0);
-    render.transcript_bg.setFill();
+    render.scrollback_bg.setFill();
     path.fill();
-    render.transcript_border.setStroke();
+    render.scrollback_border.setStroke();
     path.setLineWidth(1.0);
     path.stroke();
 
@@ -584,7 +633,7 @@ fn draw_attention_condition_bar(
     }
 }
 
-pub(crate) fn transcript_lines(card: &CardRenderData) -> Vec<String> {
+pub(crate) fn scrollback_lines(card: &CardRenderData) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(nudge) = card.last_nudge.as_deref() {
         if !nudge.is_empty() {

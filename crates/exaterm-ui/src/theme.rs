@@ -617,7 +617,7 @@ pub fn selected_card_border() -> Color {
     }
 }
 
-pub fn transcript_bg() -> Color {
+pub fn scrollback_band_bg() -> Color {
     Color {
         r: 8,
         g: 14,
@@ -626,7 +626,7 @@ pub fn transcript_bg() -> Color {
     }
 }
 
-pub fn transcript_border() -> Color {
+pub fn scrollback_band_border() -> Color {
     Color {
         r: 173,
         g: 188,

@@ -53,8 +53,8 @@ pub struct TerminalRenderState {
     pub scrollback_color: Retained<NSColor>,
     pub selected_bg: Retained<NSColor>,
     pub attention_chip_text: Retained<NSColor>,
-    pub transcript_bg: Retained<NSColor>,
-    pub transcript_border: Retained<NSColor>,
+    pub scrollback_bg: Retained<NSColor>,
+    pub scrollback_border: Retained<NSColor>,
     pub bar_caption_color: Retained<NSColor>,
     pub bar_reason_color: Retained<NSColor>,
     pub bar_empty: Retained<NSColor>,
@@ -117,8 +117,8 @@ impl TerminalRenderState {
         let scrollback_color = style::color_to_nscolor(&theme::scrollback_line_color());
         let selected_bg = style::color_to_nscolor(&theme::selected_card_border());
         let attention_chip_text = style::color_to_nscolor(&theme::title_color());
-        let transcript_bg = style::color_to_nscolor(&theme::transcript_bg());
-        let transcript_border = style::color_to_nscolor(&theme::transcript_border());
+        let scrollback_bg = style::color_to_nscolor(&theme::scrollback_band_bg());
+        let scrollback_border = style::color_to_nscolor(&theme::scrollback_band_border());
         let bar_caption_color = style::color_to_nscolor(&theme::bar_caption_color());
         let bar_reason_color = style::color_to_nscolor(&theme::bar_reason_color());
         let bar_empty = style::color_to_nscolor(&theme::bar_empty_color());
@@ -231,8 +231,8 @@ impl TerminalRenderState {
             scrollback_color,
             selected_bg,
             attention_chip_text,
-            transcript_bg,
-            transcript_border,
+            scrollback_bg,
+            scrollback_border,
             bar_caption_color,
             bar_reason_color,
             bar_empty,

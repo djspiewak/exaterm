@@ -1,5 +1,6 @@
 pub mod daemon;
 pub mod file_watch;
+pub mod headless_terminal;
 pub mod model;
 pub mod observation;
 pub mod process;

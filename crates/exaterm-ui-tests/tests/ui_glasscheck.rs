@@ -1,6 +1,9 @@
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod imp {
-    use exaterm_ui::ui_test_contract::{selectors, UiSessionKey, UiTestScenario};
+    use exaterm_ui::ui_test_contract::{
+        claude_session_bytes, codex_session_bytes, selectors, UiSessionKey, UiTestScenario,
+        TUI_SMCUP_PAINT,
+    };
     use glasscheck::{
         assert_contained_within_node, assert_count, assert_exists, assert_not_exists,
         LayoutTolerance, PollOptions, Selector,
@@ -26,6 +29,18 @@ mod imp {
         run("battlefield_click_enters_focus", battlefield_click_enters_focus);
         run("focus_exit", focus_exit);
         run("focus_switches_sessions", focus_switches_sessions);
+        run(
+            "synthetic_alt_screen_paint_appears_in_scrollback",
+            synthetic_alt_screen_paint_appears_in_scrollback,
+        );
+        run(
+            "claude_scrollback_shows_tui_frame_content",
+            claude_scrollback_shows_tui_frame_content,
+        );
+        run(
+            "codex_scrollback_shows_command_output",
+            codex_scrollback_shows_command_output,
+        );
         #[cfg(target_os = "macos")]
         run(
             "return_key_executes_embedded_terminal_command",
@@ -504,6 +519,81 @@ mod imp {
         .unwrap();
     }
 
+    fn synthetic_alt_screen_paint_appears_in_scrollback() {
+        let (harness, mounted) = mounted(UiTestScenario::BattlefieldSingleTuiActive);
+        mounted.feed_session(UiSessionKey::Shell1.session_id(), TUI_SMCUP_PAINT);
+        harness.settle(4);
+
+        let scene = mounted.host.snapshot_scene();
+        assert_exists(
+            &scene,
+            &selector(&selectors::battlefield_card_scrollback(UiSessionKey::Shell1)),
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "scrollback node should be present after alt-screen paint; {error}\n\
+                 This test is red until HeadlessTerminal.rendered_lines is implemented (§4)."
+            )
+        });
+        assert_scrollback_contains(
+            &scene,
+            &selectors::battlefield_card_scrollback(UiSessionKey::Shell1),
+            "TUI-MARKER",
+        );
+    }
+
+    fn claude_scrollback_shows_tui_frame_content() {
+        let (harness, mounted) = mounted(UiTestScenario::BattlefieldSingleTuiActive);
+        mounted.feed_session(UiSessionKey::Shell1.session_id(), claude_session_bytes());
+        harness.settle(4);
+
+        let scene = mounted.host.snapshot_scene();
+        assert_exists(
+            &scene,
+            &selector(&selectors::battlefield_card_scrollback(UiSessionKey::Shell1)),
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "scrollback node should be present after claude session bytes; {error}\n\
+                 This test is red until HeadlessTerminal.rendered_lines is implemented (§4)."
+            )
+        });
+        // Verify at least one substring from claude_session.expected.txt appears.
+        let card_selector = selectors::battlefield_card_scrollback(UiSessionKey::Shell1);
+        let resolved = scene.resolve(&selector(&card_selector)).unwrap();
+        let text = resolved.node.label.clone().unwrap_or_default();
+        let expected = ["claude", "? for help"];
+        assert!(
+            expected.iter().any(|s| text.contains(s)),
+            "scrollback should contain at least one of {expected:?}; got: {text:?}"
+        );
+    }
+
+    fn codex_scrollback_shows_command_output() {
+        let (harness, mounted) = mounted(UiTestScenario::BattlefieldSingleTuiActive);
+        mounted.feed_session(UiSessionKey::Shell1.session_id(), codex_session_bytes());
+        harness.settle(4);
+
+        let scene = mounted.host.snapshot_scene();
+        assert_exists(
+            &scene,
+            &selector(&selectors::battlefield_card_scrollback(UiSessionKey::Shell1)),
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "scrollback node should be present after codex session bytes; {error}\n\
+                 This test is red until HeadlessTerminal.rendered_lines is implemented (§4)."
+            )
+        });
+        let card_selector = selectors::battlefield_card_scrollback(UiSessionKey::Shell1);
+        let resolved = scene.resolve(&selector(&card_selector)).unwrap();
+        let text = resolved.node.label.clone().unwrap_or_default();
+        assert!(
+            text.contains("codex"),
+            "scrollback should contain 'codex'; got: {text:?}"
+        );
+    }
+
     #[cfg(target_os = "macos")]
     fn return_key_executes_embedded_terminal_command() {
         use objc2_app_kit::NSEventModifierFlags;
@@ -570,6 +660,19 @@ mod imp {
         assert!(
             label.contains(text),
             "expected {selector_name} label to contain {text:?}, got {label:?}"
+        );
+    }
+
+    fn assert_scrollback_contains(scene: &glasscheck::Scene, selector_name: &str, text: &str) {
+        let resolved = scene
+            .resolve(&selector(selector_name))
+            .unwrap_or_else(|error| {
+                panic!("scrollback node '{selector_name}' not found: {error}")
+            });
+        let label = resolved.node.label.clone().unwrap_or_default();
+        assert!(
+            label.contains(text),
+            "expected scrollback band to contain {text:?}, got: {label:?}"
         );
     }
 

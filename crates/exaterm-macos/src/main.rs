@@ -264,6 +264,11 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
         exaterm_core::terminal_stream::TerminalStreamProcessor,
     >::new()));
 
+    let headless_terminals = Rc::new(RefCell::new(BTreeMap::<
+        exaterm_types::model::SessionId,
+        exaterm_core::headless_terminal::HeadlessTerminal,
+    >::new()));
+
     let timer_beachhead = Rc::clone(&beachhead);
     let displayed_focus = Rc::new(RefCell::new(None::<exaterm_types::model::SessionId>));
 
@@ -271,6 +276,7 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
     let timer_surfaces = Rc::clone(&terminal_surfaces);
     let timer_key_surfaces = Rc::clone(&key_surfaces);
     let timer_processors = Rc::clone(&stream_processors);
+    let timer_headless = Rc::clone(&headless_terminals);
     let timer_sync_inputs = sync_inputs_enabled.clone();
     let timer_block = block2::StackBlock::new(
         move |_timer: std::ptr::NonNull<objc2_foundation::NSTimer>| {
@@ -319,6 +325,8 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
             let all_output = timer_ios.borrow_mut().drain_all_output();
             {
                 let mut stream_updates = Vec::new();
+                let mut rendered_updates: Vec<(exaterm_types::model::SessionId, Vec<String>)> =
+                    Vec::new();
                 for (session_id, bytes) in &all_output {
                     if let Some(surface) = timer_surfaces.borrow().get(session_id) {
                         surface.bridge.feed(bytes);
@@ -331,8 +339,21 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
                     if !update.semantic_lines.is_empty() {
                         stream_updates.push((*session_id, update.semantic_lines));
                     }
+                    timer_headless
+                        .borrow_mut()
+                        .entry(*session_id)
+                        .or_default()
+                        .ingest(bytes);
+                    let rendered = timer_headless
+                        .borrow()
+                        .get(session_id)
+                        .map(|h| h.rendered_lines(24))
+                        .unwrap_or_default();
+                    if !rendered.is_empty() {
+                        rendered_updates.push((*session_id, rendered));
+                    }
                 }
-                if !stream_updates.is_empty() {
+                if !stream_updates.is_empty() || !rendered_updates.is_empty() {
                     let mut state = timer_state.borrow_mut();
                     for (session_id, lines) in stream_updates {
                         exaterm_core::observation::append_recent_lines(
@@ -342,6 +363,9 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
                                 .or_insert_with(Vec::new),
                             &lines,
                         );
+                    }
+                    for (session_id, rendered) in rendered_updates {
+                        state.rendered_scrollback.insert(session_id, rendered);
                     }
                 }
             }

@@ -12,9 +12,11 @@ use exaterm_core::model::{
     blocking_prompt_launch, planning_stream_launch, running_stream_launch, ssh_shell_launch,
     user_shell_launch,
 };
+use exaterm_core::headless_terminal::HeadlessTerminal;
 use exaterm_core::observation::{
-    apply_stream_update, build_naming_evidence, build_tactical_evidence, is_bare_waiting_shell,
-    refresh_observation as refresh_session_observation, scrollback_fragments, SessionObservation,
+    apply_rendered_scrollback, apply_stream_update, build_naming_evidence, build_tactical_evidence,
+    is_bare_waiting_shell, refresh_observation as refresh_session_observation, scrollback_fragments,
+    SessionObservation,
 };
 use exaterm_core::runtime::{RuntimeEvent, SessionRuntime};
 use exaterm_core::synthesis::{
@@ -228,7 +230,8 @@ pub(crate) struct AppContext {
     pub(crate) raw_input_writers: Arc<Mutex<BTreeMap<SessionId, Arc<Mutex<UnixStream>>>>>,
     pub(crate) focus: FocusWidgets,
     pub(crate) session_cards: RefCell<BTreeMap<SessionId, SessionCardWidgets>>,
-    observations: RefCell<BTreeMap<SessionId, SessionObservation>>,
+    pub(crate) observations: RefCell<BTreeMap<SessionId, SessionObservation>>,
+    pub(crate) headless_terminals: RefCell<BTreeMap<SessionId, HeadlessTerminal>>,
     raw_stream_socket_names: RefCell<BTreeMap<SessionId, String>>,
     pub(crate) runtimes: RefCell<BTreeMap<SessionId, SessionRuntime>>,
     display_runtimes: RefCell<BTreeMap<SessionId, ClientDisplayRuntime>>,
@@ -536,6 +539,7 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
         },
         session_cards: RefCell::new(BTreeMap::new()),
         observations: RefCell::new(BTreeMap::new()),
+        headless_terminals: RefCell::new(BTreeMap::new()),
         raw_stream_socket_names: RefCell::new(BTreeMap::new()),
         runtimes: RefCell::new(BTreeMap::new()),
         display_runtimes: RefCell::new(BTreeMap::new()),
@@ -952,6 +956,7 @@ pub(crate) fn build_test_ui(app: &gtk::Application, mode: RunMode) -> BuiltTestU
         },
         session_cards: RefCell::new(BTreeMap::new()),
         observations: RefCell::new(BTreeMap::new()),
+        headless_terminals: RefCell::new(BTreeMap::new()),
         raw_stream_socket_names: RefCell::new(BTreeMap::new()),
         runtimes: RefCell::new(BTreeMap::new()),
         display_runtimes: RefCell::new(BTreeMap::new()),
@@ -2098,6 +2103,7 @@ fn observation_from_snapshot(snapshot: &ObservationSnapshot) -> SessionObservati
     SessionObservation {
         last_change: Instant::now() - Duration::from_secs(snapshot.last_change_age_secs),
         recent_lines: snapshot.recent_lines.clone(),
+        rendered_scrollback: Vec::new(),
         terminal_activity: Vec::new(),
         painted_line: snapshot.painted_line.clone(),
         shell_child_command: snapshot.shell_child_command.clone(),
@@ -2219,9 +2225,20 @@ fn drain_runtime_events(context: &Rc<AppContext>) {
     for (session_id, event) in drained {
         match event {
             RuntimeEvent::Stream(update) => {
+                let output_bytes = update.output_bytes.clone();
                 let mut observations = context.observations.borrow_mut();
                 let observation = observations.entry(session_id).or_default();
                 apply_stream_update(observation, update);
+
+                let rendered = {
+                    let mut headless = context.headless_terminals.borrow_mut();
+                    let terminal = headless.entry(session_id).or_default();
+                    terminal.ingest(&output_bytes);
+                    terminal.rendered_lines(24)
+                };
+                if !rendered.is_empty() {
+                    apply_rendered_scrollback(observation, &rendered);
+                }
             }
             RuntimeEvent::Exited(exit_code) => {
                 context

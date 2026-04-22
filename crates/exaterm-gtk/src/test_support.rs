@@ -1,8 +1,13 @@
 #[cfg(target_os = "linux")]
 mod imp {
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use exaterm_core::headless_terminal::HeadlessTerminal;
+    use exaterm_core::observation::{append_recent_lines, apply_rendered_scrollback};
+    use exaterm_core::terminal_stream::TerminalStreamProcessor;
     use exaterm_types::model::SessionId;
     use exaterm_ui::ui_test_contract::{scenario_fixture, selectors, UiSessionKey, UiTestScenario};
     use glasscheck::{
@@ -43,6 +48,40 @@ mod imp {
 
     pub struct MountedGtkUi {
         pub host: WindowHost,
+        context: Rc<AppContext>,
+        stream_processors: RefCell<BTreeMap<SessionId, TerminalStreamProcessor>>,
+        headless_terminals: RefCell<BTreeMap<SessionId, HeadlessTerminal>>,
+    }
+
+    impl MountedGtkUi {
+        /// Feed raw PTY bytes for a session through the stream processor and headless terminal.
+        /// Updates `recent_lines` (and, once §4 lands, `rendered_scrollback`) in the context.
+        pub fn feed_session(&self, session_id: SessionId, bytes: &[u8]) {
+            let update = self
+                .stream_processors
+                .borrow_mut()
+                .entry(session_id)
+                .or_default()
+                .ingest(bytes);
+            let rendered = {
+                let mut map = self.headless_terminals.borrow_mut();
+                let terminal = map.entry(session_id).or_default();
+                terminal.ingest(bytes);
+                terminal.rendered_lines(24)
+            };
+
+            let mut observations = self.context.observations.borrow_mut();
+            let obs = observations
+                .entry(session_id)
+                .or_insert_with(exaterm_core::observation::SessionObservation::new);
+            append_recent_lines(&mut obs.recent_lines, &update.semantic_lines);
+            if !rendered.is_empty() {
+                apply_rendered_scrollback(obs, &rendered);
+            }
+            drop(observations);
+
+            refresh_snapshot_and_cards(&self.context);
+        }
     }
 
     pub fn mount_scenario(
@@ -91,7 +130,12 @@ mod imp {
         register_interaction_nodes(&host, &built.context);
         harness.settle(8);
 
-        Ok(MountedGtkUi { host })
+        Ok(MountedGtkUi {
+            host,
+            context: built.context,
+            stream_processors: RefCell::new(BTreeMap::new()),
+            headless_terminals: RefCell::new(BTreeMap::new()),
+        })
     }
 
     fn register_interaction_nodes(host: &WindowHost, context: &Rc<AppContext>) {

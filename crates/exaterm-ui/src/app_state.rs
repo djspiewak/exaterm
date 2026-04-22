@@ -92,6 +92,7 @@ pub struct AppState {
     pub workspace: WorkspaceViewState,
     pub observations: BTreeMap<SessionId, ObservedActivity>,
     pub recent_lines: BTreeMap<SessionId, Vec<String>>,
+    pub rendered_scrollback: BTreeMap<SessionId, Vec<String>>,
     pub raw_socket_names: BTreeMap<SessionId, String>,
     pub summaries: BTreeMap<SessionId, TacticalSynthesis>,
     pub auto_nudge_enabled: BTreeMap<SessionId, bool>,
@@ -105,6 +106,7 @@ impl AppState {
             workspace: WorkspaceViewState::new(),
             observations: BTreeMap::new(),
             recent_lines: BTreeMap::new(),
+            rendered_scrollback: BTreeMap::new(),
             raw_socket_names: BTreeMap::new(),
             summaries: BTreeMap::new(),
             auto_nudge_enabled: BTreeMap::new(),
@@ -171,6 +173,8 @@ impl AppState {
         let session_ids: Vec<_> = snapshot.sessions.iter().map(|s| s.record.id).collect();
         self.observations.retain(|id, _| session_ids.contains(id));
         self.recent_lines.retain(|id, _| session_ids.contains(id));
+        self.rendered_scrollback
+            .retain(|id, _| session_ids.contains(id));
         self.raw_socket_names
             .retain(|id, _| session_ids.contains(id));
         self.summaries.retain(|id, _| session_ids.contains(id));
@@ -206,20 +210,25 @@ impl AppState {
                         )
                     },
                 );
-                let scrollback = self
-                    .recent_lines
-                    .get(&session.id)
-                    .map(|lines| {
-                        let taken: Vec<String> = lines
-                            .iter()
-                            .rev()
-                            .map(|l| l.trim().to_string())
-                            .filter(|l| !l.is_empty())
-                            .take(4)
-                            .collect();
-                        taken.into_iter().rev().collect()
-                    })
-                    .unwrap_or_default();
+                let scrollback = if let Some(rendered) =
+                    self.rendered_scrollback.get(&session.id).filter(|v| !v.is_empty())
+                {
+                    rendered.clone()
+                } else {
+                    self.recent_lines
+                        .get(&session.id)
+                        .map(|lines| {
+                            let taken: Vec<String> = lines
+                                .iter()
+                                .rev()
+                                .map(|l| l.trim().to_string())
+                                .filter(|l| !l.is_empty())
+                                .take(4)
+                                .collect();
+                            taken.into_iter().rev().collect()
+                        })
+                        .unwrap_or_default()
+                };
                 let title = session
                     .display_name
                     .as_deref()

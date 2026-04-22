@@ -24,10 +24,10 @@ fn main() {
             card_bg_has_vertical_gradient,
         ),
         ("card_has_shadow_below", card_has_shadow_below),
-        ("transcript_bg_matches_theme", transcript_bg_matches_theme),
+        ("scrollback_bg_matches_theme", scrollback_bg_matches_theme),
         (
-            "transcript_border_matches_theme",
-            transcript_border_matches_theme,
+            "scrollback_border_matches_theme",
+            scrollback_border_matches_theme,
         ),
         (
             "selected_card_border_is_bright",
@@ -62,6 +62,14 @@ fn main() {
         (
             "scrollback_uses_monospace_proportions",
             scrollback_uses_monospace_proportions,
+        ),
+        (
+            "scrollback_long_line_does_not_overflow_band",
+            scrollback_long_line_does_not_overflow_band,
+        ),
+        (
+            "scrollback_long_line_wraps_to_second_display_row",
+            scrollback_long_line_wraps_to_second_display_row,
         ),
         ("attention_bar_label_rendered", attention_bar_label_rendered),
         ("nudge_chip_renders_on_right", nudge_chip_renders_on_right),
@@ -144,9 +152,9 @@ fn card_has_shadow_below(mtm: MainThreadMarker) {
     );
 }
 
-/// Render card with scrollback, sample transcript region.
+/// Render card with scrollback, sample scrollback band region.
 /// Expect rgba(8,14,22,0.34) from shared theme.
-fn transcript_bg_matches_theme(mtm: MainThreadMarker) {
+fn scrollback_bg_matches_theme(mtm: MainThreadMarker) {
     let mut card = make_card(BattleCardStatus::Active, "Test", "Headline");
     card.scrollback = vec!["$ cargo build".to_string(), "Compiling...".to_string()];
     let image = render_battlefield(mtm, vec![card], None, CARD_SIZE);
@@ -164,13 +172,13 @@ fn transcript_bg_matches_theme(mtm: MainThreadMarker) {
     // After fix, red channel should be closer to composited value (~5-12)
     assert!(
         avg[0] < 18.0,
-        "transcript bg red channel ({:.1}) too high — expected theme value rgba(8,14,22,0.34)",
+        "scrollback bg red channel ({:.1}) too high — expected theme value rgba(8,14,22,0.34)",
         avg[0]
     );
 }
 
-/// Sample transcript border pixels. Expect rgba(173,188,204,0.08) from shared theme.
-fn transcript_border_matches_theme(mtm: MainThreadMarker) {
+/// Sample scrollback band border pixels. Expect rgba(173,188,204,0.08) from shared theme.
+fn scrollback_border_matches_theme(mtm: MainThreadMarker) {
     let mut card = make_card(BattleCardStatus::Active, "Test", "Headline");
     card.scrollback = vec!["$ cargo build".to_string()];
     let image = render_battlefield(mtm, vec![card], None, CARD_SIZE);
@@ -186,7 +194,7 @@ fn transcript_border_matches_theme(mtm: MainThreadMarker) {
     // The composited result on a dark bg should have very low channel differences
     assert!(
         avg[1] < 50.0,
-        "transcript border green channel ({:.1}) too high — expected subtle border rgba(173,188,204,0.08)",
+        "scrollback border green channel ({:.1}) too high — expected subtle border rgba(173,188,204,0.08)",
         avg[1]
     );
 }
@@ -386,6 +394,41 @@ fn scrollback_uses_monospace_proportions(mtm: MainThreadMarker) {
     assert!(
         has_text_content(&image, 28, 155, 350, 60, 0.01),
         "scrollback lines should be rendered in the transcript area"
+    );
+}
+
+/// A 120-char scrollback line must not draw pixels past the band's right edge.
+///
+/// Reproduces the overflow bug: `drawAtPoint` with no clipping lets 120×6.6px=792px
+/// of text escape the ~468px-wide band. After the fix (wrapping), text stays inside.
+fn scrollback_long_line_does_not_overflow_band(mtm: MainThreadMarker) {
+    let mut card = make_card(BattleCardStatus::Active, "Test", "Headline");
+    card.scrollback = vec!["A".repeat(120)];
+    let image = render_battlefield(mtm, vec![card], None, CARD_SIZE);
+
+    // Band occupies x=16..484 for a 500px card (pad_x=16, content_width=468).
+    // Pixels just past x=484 should be card-border/background, not text.
+    assert!(
+        !has_text_content(&image, 486, 155, 12, 34, 0.02),
+        "scrollback text must not overflow past the band right edge (x>484)"
+    );
+}
+
+/// A 120-char scrollback line should wrap to a second display row.
+///
+/// Reproduces the wrapping bug: without character-level wrapping the band is
+/// only one display row tall and the second-row area has no text. After the
+/// fix the 120-char line splits into two rows and the second row has content.
+fn scrollback_long_line_wraps_to_second_display_row(mtm: MainThreadMarker) {
+    let mut card = make_card(BattleCardStatus::Active, "Test", "Headline");
+    card.scrollback = vec!["A".repeat(120)];
+    let image = render_battlefield(mtm, vec![card], None, CARD_SIZE);
+
+    // Band starts at y≈155; first display-row text at y≈165, second at y≈183.
+    // Without wrapping there is no second row inside the band.
+    assert!(
+        has_text_content(&image, 26, 183, 200, 18, 0.01),
+        "120-char scrollback line should wrap to a second display row at y≈183"
     );
 }
 

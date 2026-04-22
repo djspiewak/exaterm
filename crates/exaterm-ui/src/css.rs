@@ -231,8 +231,8 @@ pub fn generate_application_css() -> String {
         {i}padding: 8px 10px;\n\
         {i}min-height: 0;\n\
         }}",
-        tb = css_color(&theme::transcript_border()),
-        tbg = css_color(&theme::transcript_bg()),
+        tb = css_color(&theme::scrollback_band_border()),
+        tbg = css_color(&theme::scrollback_band_bg()),
     ));
 
     // .card-scrollback-line — uses scrollback_line_font()
