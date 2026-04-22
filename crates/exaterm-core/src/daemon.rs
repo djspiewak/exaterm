@@ -12,9 +12,9 @@ use crate::proto::{
 use crate::runtime::{spawn_headless_runtime, RuntimeEvent, SessionRuntime};
 use crate::synthesis::{
     name_signature, nudge_signature, should_skip_repeated_paused_summary, summary_signature,
-    summary_substantive_signature, NameSuggestion, NamingEvidence, NudgeEvidence, NudgeSuggestion,
-    ProviderCallResult, ProviderPreferences, SynthesisBackendRegistry, TacticalState,
-    TacticalSynthesis,
+    summary_substantive_signature, CardCharBudget, NameSuggestion, NamingEvidence, NudgeEvidence,
+    NudgeSuggestion, ProviderCallResult, ProviderPreferences, SynthesisBackendRegistry,
+    TacticalState, TacticalSynthesis,
 };
 use portable_pty::PtySize;
 use serde::Serialize;
@@ -52,6 +52,7 @@ struct SummaryJob {
     substantive_signature: String,
     evidence: crate::synthesis::TacticalEvidence,
     preferences: ProviderPreferences,
+    budget: Option<CardCharBudget>,
 }
 
 struct SummaryResult {
@@ -71,6 +72,7 @@ struct NamingJob {
     signature: String,
     evidence: NamingEvidence,
     preferences: ProviderPreferences,
+    title_chars: Option<u16>,
 }
 
 struct NamingResult {
@@ -240,6 +242,7 @@ struct DaemonState {
     naming_cache: BTreeMap<SessionId, NamingCacheEntry>,
     nudge_worker: Option<NudgeWorker>,
     nudge_cache: BTreeMap<SessionId, NudgeCacheEntry>,
+    card_budgets: BTreeMap<SessionId, CardCharBudget>,
     forwarded_sessions: BTreeSet<SessionId>,
     snapshot_dirty: bool,
 }
@@ -274,6 +277,7 @@ impl DaemonState {
             naming_cache: BTreeMap::new(),
             nudge_worker: spawn_nudge_worker(),
             nudge_cache: BTreeMap::new(),
+            card_budgets: BTreeMap::new(),
             forwarded_sessions: BTreeSet::new(),
             snapshot_dirty: false,
         }
@@ -411,6 +415,7 @@ impl DaemonState {
         self.summary_cache.clear();
         self.naming_cache.clear();
         self.nudge_cache.clear();
+        self.card_budgets.clear();
         self.forwarded_sessions.clear();
         self.workspace.replace_sessions(Vec::new());
         self.snapshot_dirty = true;
@@ -886,6 +891,17 @@ fn handle_client_message(
             state.snapshot_dirty = true;
             Ok(false)
         }
+        ClientMessage::ReportCardBudget { session_id, budget } => {
+            // TODO: prune card_budgets alongside summary_cache/naming_cache/nudge_cache
+            // when per-session removal is added.
+            state.card_budgets.insert(session_id, CardCharBudget {
+                title_chars: budget.title_chars.max(4),
+                headline_chars: budget.headline_chars.max(4),
+                detail_chars: budget.detail_chars.max(4),
+                alert_chars: budget.alert_chars.max(4),
+            });
+            Ok(false)
+        }
         ClientMessage::DetachClient { keep_alive } => {
             *client_writer = None;
             if keep_alive {
@@ -1016,12 +1032,15 @@ fn maybe_queue_summary(
     entry.in_flight = true;
     entry.last_attempt = Some(Instant::now());
     entry.requested_signature = Some(signature.clone());
+    let budget = state.card_budgets.get(&session_id).copied()
+        .or(Some(CardCharBudget::DEFAULT_WORST_CASE));
     let _ = worker.requests.send(SummaryJob {
         session_id,
         signature,
         substantive_signature,
         evidence: evidence.clone(),
         preferences: active_provider_preferences(&entry.skipped_providers),
+        budget,
     });
 }
 
@@ -1049,11 +1068,15 @@ fn maybe_queue_name(state: &mut DaemonState, session_id: SessionId, evidence: &N
     entry.in_flight = true;
     entry.last_attempt = Some(Instant::now());
     entry.requested_signature = Some(signature.clone());
+    let title_chars = state.card_budgets.get(&session_id)
+        .map(|b| b.title_chars)
+        .or(Some(CardCharBudget::DEFAULT_WORST_CASE.title_chars));
     let _ = worker.requests.send(NamingJob {
         session_id,
         signature,
         evidence: evidence.clone(),
         preferences: active_provider_preferences(&entry.skipped_providers),
+        title_chars,
     });
 }
 
@@ -1370,7 +1393,8 @@ fn spawn_summary_worker() -> Option<SummaryWorker> {
     let (result_tx, result_rx) = mpsc::channel::<SummaryResult>();
     thread::spawn(move || {
         while let Ok(job) = request_rx.recv() {
-            let summary = registry.summarize_blocking(&job.preferences, &job.evidence);
+            let summary =
+                registry.summarize_blocking(&job.preferences, &job.evidence, job.budget);
             let _ = result_tx.send(SummaryResult {
                 session_id: job.session_id,
                 signature: job.signature,
@@ -1391,7 +1415,8 @@ fn spawn_naming_worker() -> Option<NamingWorker> {
     let (result_tx, result_rx) = mpsc::channel::<NamingResult>();
     thread::spawn(move || {
         while let Ok(job) = request_rx.recv() {
-            let suggestion = registry.suggest_name_blocking(&job.preferences, &job.evidence);
+            let suggestion =
+                registry.suggest_name_blocking(&job.preferences, &job.evidence, job.title_chars);
             let _ = result_tx.send(NamingResult {
                 session_id: job.session_id,
                 signature: job.signature,
@@ -2172,5 +2197,107 @@ mod tests {
         assert!(job.preferences.skipped_providers.is_empty());
 
         drop(response_tx);
+    }
+
+    #[test]
+    fn maybe_queue_summary_uses_default_budget_when_none_reported() {
+        let mut state = DaemonState::new();
+
+        let (request_tx, request_rx) = mpsc::channel();
+        let (response_tx, response_rx) = mpsc::channel::<SummaryResult>();
+        state.summary_worker = Some(SummaryWorker {
+            requests: request_tx,
+            responses: response_rx,
+        });
+
+        let session_id = SessionId(42);
+        state.summary_cache.insert(session_id, SummaryCacheEntry::new());
+
+        let evidence = crate::synthesis::TacticalEvidence {
+            session_name: "Shell".into(),
+            task_label: "Test".into(),
+            dominant_process: None,
+            process_tree_excerpt: None,
+            recent_files: vec![],
+            terminal_status_line: None,
+            terminal_status_line_age: None,
+            recent_terminal_activity: vec![],
+            recent_events: vec![],
+        };
+
+        maybe_queue_summary(&mut state, session_id, &evidence);
+
+        let job = request_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("summary job should be queued");
+        assert_eq!(job.budget, Some(CardCharBudget::DEFAULT_WORST_CASE));
+
+        drop(response_tx);
+    }
+
+    #[test]
+    fn maybe_queue_summary_threads_stored_budget_into_job() {
+        let mut state = DaemonState::new();
+
+        let (request_tx, request_rx) = mpsc::channel();
+        let (response_tx, response_rx) = mpsc::channel::<SummaryResult>();
+        state.summary_worker = Some(SummaryWorker {
+            requests: request_tx,
+            responses: response_rx,
+        });
+
+        let session_id = SessionId(99);
+        state.summary_cache.insert(session_id, SummaryCacheEntry::new());
+
+        let stored_budget = CardCharBudget {
+            title_chars: 30,
+            headline_chars: 60,
+            detail_chars: 55,
+            alert_chars: 40,
+        };
+        state.card_budgets.insert(session_id, stored_budget);
+
+        let evidence = crate::synthesis::TacticalEvidence {
+            session_name: "Shell".into(),
+            task_label: "Test".into(),
+            dominant_process: None,
+            process_tree_excerpt: None,
+            recent_files: vec![],
+            terminal_status_line: None,
+            terminal_status_line_age: None,
+            recent_terminal_activity: vec![],
+            recent_events: vec![],
+        };
+
+        maybe_queue_summary(&mut state, session_id, &evidence);
+
+        let job = request_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("summary job should be queued");
+        assert_eq!(job.budget, Some(stored_budget));
+
+        drop(response_tx);
+    }
+
+    #[test]
+    fn report_card_budget_clamps_zero_values() {
+        // The clamping logic is: budget.field.max(4) for each field.
+        // Verify this directly since handle_client_message needs ControlNotifier.
+        let raw = CardCharBudget {
+            title_chars: 0,
+            headline_chars: 0,
+            detail_chars: 0,
+            alert_chars: 0,
+        };
+        let clamped = CardCharBudget {
+            title_chars: raw.title_chars.max(4),
+            headline_chars: raw.headline_chars.max(4),
+            detail_chars: raw.detail_chars.max(4),
+            alert_chars: raw.alert_chars.max(4),
+        };
+        assert_eq!(clamped.title_chars, 4);
+        assert_eq!(clamped.headline_chars, 4);
+        assert_eq!(clamped.detail_chars, 4);
+        assert_eq!(clamped.alert_chars, 4);
     }
 }

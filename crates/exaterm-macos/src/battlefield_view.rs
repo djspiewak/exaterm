@@ -20,11 +20,15 @@ use crate::app_state::CardRenderData;
 use crate::style;
 use crate::terminal_view::TerminalRenderState;
 use exaterm_types::model::SessionId;
+use exaterm_types::proto::ClientMessage;
+use exaterm_types::synthesis::CardCharBudget;
 use exaterm_ui::layout::{
-    card_layout, card_terminal_slot_rect, focus_card_layout, CardRect, MARGIN,
+    card_char_budget, card_layout, card_terminal_slot_rect, focus_card_layout, CardRect, MARGIN,
 };
 use exaterm_ui::presentation::NudgeStateTone;
 use exaterm_ui::presentation::{chrome_visibility, ChromeVisibility};
+use std::collections::BTreeMap;
+use std::sync::mpsc;
 
 // ---------------------------------------------------------------------------
 // Thread-local data bridge (main thread only)
@@ -37,6 +41,11 @@ thread_local! {
     static INTERACTION: RefCell<Option<Rc<dyn Fn(BattlefieldInteraction)>>> = RefCell::new(None);
     static EMBEDDED: RefCell<BTreeSet<SessionId>> = RefCell::new(BTreeSet::new());
     static FOCUSED: Cell<bool> = const { Cell::new(false) };
+    static LAST_FOCUSED: Cell<bool> = const { Cell::new(false) };
+    /// Last-sent card budget per session — used to dedup on every redraw.
+    static LAST_SENT_BUDGETS: RefCell<BTreeMap<SessionId, CardCharBudget>> =
+        RefCell::new(BTreeMap::new());
+    static BUDGET_SENDER: RefCell<Option<mpsc::Sender<ClientMessage>>> = RefCell::new(None);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,6 +74,11 @@ where
     F: Fn(BattlefieldInteraction) + 'static,
 {
     INTERACTION.with(|slot| *slot.borrow_mut() = Some(Rc::new(handler)));
+}
+
+/// Register the command sender so `draw_battlefield` can dispatch `ReportCardBudget`.
+pub fn set_budget_sender(sender: mpsc::Sender<ClientMessage>) {
+    BUDGET_SENDER.with(|slot| *slot.borrow_mut() = Some(sender));
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +136,18 @@ fn draw_battlefield(frame: NSRect) {
     let embedded = EMBEDDED.with(|slot| slot.borrow().clone());
     let focused = FOCUSED.with(|slot| slot.get());
 
+    let last_focused = LAST_FOCUSED.with(|f| f.get());
+    LAST_FOCUSED.with(|f| f.set(focused));
+    if focused != last_focused {
+        // Focus mode changed — invalidate the selected session's dedup entry so it
+        // gets re-dispatched with the correct budget for the new mode.
+        if let Some(focused_id) = selected {
+            LAST_SENT_BUDGETS.with(|last| {
+                last.borrow_mut().remove(&focused_id);
+            });
+        }
+    }
+
     let render = match render {
         Some(r) => r,
         None => return,
@@ -140,7 +166,33 @@ fn draw_battlefield(frame: NSRect) {
 
     let rects = layout_for_mode(cards.len(), frame, focused);
 
-    for (card, rect) in cards.iter().zip(rects.iter()) {
+    let budgets: Vec<CardCharBudget> = rects.iter().map(|r| card_char_budget(r.w)).collect();
+
+    // Dispatch ReportCardBudget for any card whose budget changed since last draw.
+    BUDGET_SENDER.with(|sender_slot| {
+        if let Some(sender) = sender_slot.borrow().as_ref() {
+            LAST_SENT_BUDGETS.with(|last| {
+                let mut last = last.borrow_mut();
+                for ((card, _rect), &budget) in cards.iter().zip(rects.iter()).zip(budgets.iter()) {
+                    // When in focus mode, skip the focused session — focus_view.rs
+                    // dispatches the wider panel budget for that session.
+                    if focused && selected == Some(card.id) {
+                        continue;
+                    }
+                    if last.get(&card.id) != Some(&budget) {
+                        last.insert(card.id, budget);
+                        let _ = sender.send(ClientMessage::ReportCardBudget {
+                            session_id: card.id,
+                            budget,
+                        });
+                    }
+                }
+                last.retain(|id, _| cards.iter().any(|c| c.id == *id));
+            });
+        }
+    });
+
+    for ((card, rect), &live_budget) in cards.iter().zip(rects.iter()).zip(budgets.iter()) {
         let is_selected = selected == Some(card.id);
         draw_card(
             card,
@@ -149,6 +201,7 @@ fn draw_battlefield(frame: NSRect) {
             embedded.contains(&card.id),
             focused,
             &render,
+            &live_budget,
         );
     }
 }
@@ -205,7 +258,9 @@ fn draw_card(
     embedded_terminal: bool,
     focused_mode: bool,
     render: &TerminalRenderState,
+    budget: &CardCharBudget,
 ) {
+    use exaterm_types::synthesis::truncate_with_ellipsis;
     let ns_rect = NSRect::new(
         NSPoint {
             x: rect.x,
@@ -270,10 +325,12 @@ fn draw_card(
     let content_width = rect.w - 32.0;
     let chrome = card_chrome_visibility(card, focused_mode);
 
-    // Title.
+    // Title — clamp to live budget so no mid-word clip at rounded-rect edge.
     if chrome.title_visible {
+        let title =
+            truncate_with_ellipsis(&card.title, budget.title_chars.into());
         let title_str =
-            build_simple_attr_string(&card.title, &render.title_font, &render.title_color);
+            build_simple_attr_string(&title, &render.title_font, &render.title_color);
         title_str.drawAtPoint(NSPoint {
             x: rect.x + pad_x,
             y: y_cursor,
@@ -301,13 +358,21 @@ fn draw_card(
         y_cursor += if focused_mode { 4.0 } else { 8.0 };
     }
 
-    // Headline (synthesis).
-    let headline = if embedded_terminal && !card.headline.is_empty() {
+    // Headline (synthesis) — clamp to live budget.
+    let raw_headline = if embedded_terminal && !card.headline.is_empty() {
         &card.headline
     } else if !card.combined_headline.is_empty() {
         &card.combined_headline
     } else {
         &card.headline
+    };
+    let headline_clamped;
+    let headline = if !raw_headline.is_empty() {
+        headline_clamped =
+            truncate_with_ellipsis(raw_headline, budget.headline_chars.into());
+        &*headline_clamped
+    } else {
+        raw_headline.as_str()
     };
     if chrome.headline_visible && !headline.is_empty() {
         let headline_str =
@@ -333,8 +398,9 @@ fn draw_card(
 
     if let Some(ref detail) = card.detail {
         if chrome.headline_visible && !detail.is_empty() && !embedded_terminal {
+            let detail = truncate_with_ellipsis(detail, budget.detail_chars.into());
             let detail_str =
-                build_simple_attr_string(detail, &render.detail_font, &render.detail_color);
+                build_simple_attr_string(&detail, &render.detail_font, &render.detail_color);
             detail_str.drawInRect(NSRect::new(
                 NSPoint::new(rect.x + pad_x, y_cursor),
                 NSSize::new(content_width, 42.0),
@@ -346,6 +412,7 @@ fn draw_card(
     // Alert.
     if let Some(ref alert_text) = card.alert {
         if chrome.headline_visible && !alert_text.is_empty() {
+            let alert_text = truncate_with_ellipsis(alert_text, (budget.alert_chars as usize).saturating_sub(2));
             let alert_line = format!("! {}", alert_text);
             let alert_str =
                 build_simple_attr_string(&alert_line, &render.alert_font, &render.alert_color);

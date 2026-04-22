@@ -1,3 +1,5 @@
+use exaterm_types::synthesis::CardCharBudget;
+
 const ESTIMATED_TERMINAL_CELL_WIDTH: i32 = 8;
 const ESTIMATED_TERMINAL_CELL_HEIGHT: i32 = 18;
 const MIN_EMBEDDED_TERMINAL_COLS: i32 = 80;
@@ -182,6 +184,59 @@ pub fn focus_card_layout(card_count: usize, view_w: f64, view_h: f64) -> Vec<Car
     rects
 }
 
+// Font point sizes for each card field.
+const TITLE_PT:    f64 = 18.0;
+const HEADLINE_PT: f64 = 20.0;
+const DETAIL_PT:   f64 = 15.0;
+const ALERT_PT:    f64 = 11.0;
+
+// Average glyph width as a fraction of the point size (proportional font estimate).
+const TITLE_RATIO:    f64 = 0.55;
+const HEADLINE_RATIO: f64 = 0.52;
+const DETAIL_RATIO:   f64 = 0.50;
+const ALERT_RATIO:    f64 = 0.48;
+
+fn budget_for_usable(usable: f64) -> CardCharBudget {
+    let title_chars   = (usable / (TITLE_PT   * TITLE_RATIO  )).floor() as u16;
+    let headline_chars= (2.0 * usable / (HEADLINE_PT * HEADLINE_RATIO)).floor() as u16;
+    let detail_chars  = (2.0 * usable / (DETAIL_PT   * DETAIL_RATIO  )).floor() as u16;
+    let alert_chars   = (usable / (ALERT_PT    * ALERT_RATIO  )).floor() as u16;
+    CardCharBudget {
+        title_chars:    title_chars.max(4),
+        headline_chars: headline_chars.max(4),
+        detail_chars:   detail_chars.max(4),
+        alert_chars:    alert_chars.max(4),
+    }
+}
+
+/// Compute per-field character budget from an actual card pixel width.
+///
+/// Uses font metrics from the shared theme:
+/// - title: 18pt/800w, ~0.55 avg glyph-to-pt ratio, 1 line
+/// - headline: 20pt/800w, ~0.52 ratio, 2 lines (longest line counts)
+/// - detail: 15pt/650w, ~0.50 ratio, 2 lines
+/// - alert: 11pt/600w, ~0.48 ratio, 1 line
+///
+/// Horizontal padding is 16px per side (32px total), so usable content width
+/// is `card_w_px - 32`.
+pub fn card_char_budget(card_w_px: f64) -> CardCharBudget {
+    const PAD: f64 = 32.0;
+    let usable = (card_w_px - PAD).max(0.0);
+    budget_for_usable(usable)
+}
+
+/// Budget for focus-panel card variants.
+///
+/// The focus panel uses 18px padding per side (12px card margin + 6px content indent = 30px
+/// from the frame edge, and the right side eats another 6px). The headline `drawInRect` uses
+/// `card_width - 36`, so total horizontal padding consumed is 36px — not the 32px used by
+/// the battlefield cards.
+pub fn focus_card_char_budget(card_w_px: f64) -> CardCharBudget {
+    const FOCUS_PAD: f64 = 36.0;
+    let usable = (card_w_px - FOCUS_PAD).max(0.0);
+    budget_for_usable(usable)
+}
+
 pub fn card_terminal_slot_rect(card: &CardRect) -> TerminalSlotRect {
     const PADDING_X: f64 = 16.0;
     const TOP_CHROME: f64 = 104.0;
@@ -324,6 +379,35 @@ mod tests {
         assert!(slot.y >= card.y);
         assert!(slot.x + slot.w <= card.x + card.w + 0.01);
         assert!(slot.y + slot.h <= card.y + card.h + 0.01);
+    }
+
+    #[test]
+    fn card_char_budget_monotone_wider_card_gets_more_chars() {
+        let narrow = card_char_budget(300.0);
+        let wide = card_char_budget(800.0);
+        assert!(wide.title_chars >= narrow.title_chars);
+        assert!(wide.headline_chars >= narrow.headline_chars);
+        assert!(wide.detail_chars >= narrow.detail_chars);
+        assert!(wide.alert_chars >= narrow.alert_chars);
+    }
+
+    #[test]
+    fn card_char_budget_single_col_at_1400px() {
+        // card_layout(1, 1400, 900) gives card_w = 1400 - 24 = 1376
+        let rects = card_layout(1, 1400.0, 900.0);
+        let budget = card_char_budget(rects[0].w);
+        // With ~1376 px usable width, headline (20pt/0.52) should fit ~65+ chars
+        assert!(budget.headline_chars >= 60);
+        assert!(budget.title_chars >= 40);
+    }
+
+    #[test]
+    fn card_char_budget_four_col_at_1400px() {
+        // card_layout(4, 1400, 900): 2 columns, card_w ≈ 682
+        let rects = card_layout(4, 1400.0, 900.0);
+        let budget = card_char_budget(rects[0].w);
+        // Narrower cards; headline should still provide a useful budget.
+        assert!(budget.headline_chars >= 20);
     }
 
     #[test]

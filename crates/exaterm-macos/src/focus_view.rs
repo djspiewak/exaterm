@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::mpsc;
 
 use objc2::define_class;
 use objc2::rc::Retained;
@@ -11,7 +12,11 @@ use objc2_foundation::{NSAttributedString, NSObjectProtocol, NSPoint, NSRect, NS
 
 use crate::app_state::FocusRenderData;
 use crate::terminal_view::TerminalRenderState;
-use exaterm_ui::layout::{focus_terminal_slot_rect, FOCUS_STATUS_BAR_HEIGHT};
+use exaterm_types::model::SessionId;
+use exaterm_types::proto::ClientMessage;
+use exaterm_types::synthesis::CardCharBudget;
+use exaterm_types::synthesis::truncate_with_ellipsis;
+use exaterm_ui::layout::{focus_card_char_budget, focus_terminal_slot_rect, FOCUS_STATUS_BAR_HEIGHT};
 use exaterm_ui::presentation::chrome_visibility;
 use exaterm_ui::theme;
 use exaterm_ui::theme::Color;
@@ -19,11 +24,17 @@ use exaterm_ui::theme::Color;
 thread_local! {
     static FOCUS: RefCell<Option<FocusRenderData>> = const { RefCell::new(None) };
     static RENDER: RefCell<Option<Rc<TerminalRenderState>>> = RefCell::new(None);
+    static FOCUS_BUDGET_SENDER: RefCell<Option<mpsc::Sender<ClientMessage>>> = const { RefCell::new(None) };
+    static LAST_FOCUS_BUDGET: RefCell<Option<(SessionId, CardCharBudget)>> = const { RefCell::new(None) };
 }
 
 pub fn set_focus_data(data: Option<FocusRenderData>, render: Rc<TerminalRenderState>) {
     FOCUS.with(|slot| *slot.borrow_mut() = data);
     RENDER.with(|slot| *slot.borrow_mut() = Some(render));
+}
+
+pub fn set_focus_budget_sender(sender: mpsc::Sender<ClientMessage>) {
+    FOCUS_BUDGET_SENDER.with(|slot| *slot.borrow_mut() = Some(sender));
 }
 
 define_class!(
@@ -63,6 +74,30 @@ fn draw_focus(frame: NSRect) {
         NSPoint::new(12.0, 0.0),
         NSSize::new((frame.size.width - 24.0).max(0.0), frame.size.height),
     );
+
+    // Dispatch the focus-panel budget to the daemon (deduped by value).
+    let focus_budget = focus_card_char_budget(card_rect.size.width);
+    let changed = LAST_FOCUS_BUDGET.with(|b| {
+        let mut b = b.borrow_mut();
+        let key = (data.id, focus_budget);
+        if b.as_ref() != Some(&key) {
+            *b = Some(key);
+            true
+        } else {
+            false
+        }
+    });
+    if changed {
+        FOCUS_BUDGET_SENDER.with(|slot| {
+            if let Some(sender) = slot.borrow().as_ref() {
+                let _ = sender.send(ClientMessage::ReportCardBudget {
+                    session_id: data.id,
+                    budget: focus_budget,
+                });
+            }
+        });
+    }
+
     let corner = 24.0;
     let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(card_rect, corner, corner);
     let visual_status = data.visual_status();
@@ -96,7 +131,8 @@ fn draw_focus(frame: NSRect) {
     let mut y = card_rect.origin.y + 16.0;
     let chrome = chrome_visibility(data.summarized(), true, false);
     if chrome.title_visible {
-        build_simple_attr_string(&data.title, &render.title_font, &render.title_color)
+        let title = truncate_with_ellipsis(&data.title, focus_budget.title_chars.into());
+        build_simple_attr_string(&title, &render.title_font, &render.title_color)
             .drawAtPoint(NSPoint::new(pad_x, y));
         y += 28.0;
     }
@@ -124,8 +160,9 @@ fn draw_focus(frame: NSRect) {
     }
 
     if chrome.headline_visible && !data.combined_headline.is_empty() {
+        let headline = truncate_with_ellipsis(&data.combined_headline, focus_budget.headline_chars.into());
         build_simple_attr_string(
-            &data.combined_headline,
+            &headline,
             &render.headline_font,
             &render.headline_color,
         )

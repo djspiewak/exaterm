@@ -1,5 +1,6 @@
 pub use exaterm_types::synthesis::{
-    AttentionLevel, NameSuggestion, NudgeSuggestion, TacticalState, TacticalSynthesis,
+    truncate_with_ellipsis, AttentionLevel, CardCharBudget, NameSuggestion, NudgeSuggestion,
+    TacticalState, TacticalSynthesis,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -142,6 +143,7 @@ impl SynthesisBackendRegistry {
         &self,
         preferences: &ProviderPreferences,
         evidence: &TacticalEvidence,
+        limits: Option<CardCharBudget>,
     ) -> ProviderCallResult<TacticalSynthesis> {
         let user_prompt = format!(
             "Produce one grounded Exaterm tactical classification for this terminal session. Fill every field from the evidence below and do not invent unseen work, intent, or progress.\n\nEvidence:\n{}",
@@ -154,16 +156,19 @@ impl SynthesisBackendRegistry {
                 self.openai.as_ref().expect("openai backend must exist"),
                 &self.summary_model,
                 evidence,
+                limits.as_ref(),
             ),
             SynthesisProvider::CodexCli => summarize_cli_blocking(
                 self.codex.as_ref().expect("codex backend must exist"),
-                tactical_system_prompt(),
+                &tactical_system_prompt(limits.as_ref()),
                 &user_prompt,
+                limits.as_ref(),
             ),
             SynthesisProvider::ClaudeCli => summarize_claude_blocking(
                 self.claude.as_ref().expect("claude backend must exist"),
-                tactical_system_prompt(),
+                &tactical_system_prompt(limits.as_ref()),
                 &user_prompt,
+                limits.as_ref(),
             ),
         })
     }
@@ -172,6 +177,7 @@ impl SynthesisBackendRegistry {
         &self,
         preferences: &ProviderPreferences,
         evidence: &NamingEvidence,
+        max_title_chars: Option<u16>,
     ) -> ProviderCallResult<NameSuggestion> {
         let user_prompt = format!(
             "Choose a stable operator-facing terminal name from this history. Return empty string if the history is still too thin:\n{}",
@@ -184,16 +190,19 @@ impl SynthesisBackendRegistry {
                 self.openai.as_ref().expect("openai backend must exist"),
                 &self.naming_model,
                 evidence,
+                max_title_chars,
             ),
             SynthesisProvider::CodexCli => suggest_name_cli_blocking(
                 self.codex.as_ref().expect("codex backend must exist"),
-                naming_system_prompt(),
+                &naming_system_prompt(max_title_chars),
                 &user_prompt,
+                max_title_chars,
             ),
             SynthesisProvider::ClaudeCli => suggest_name_claude_blocking(
                 self.claude.as_ref().expect("claude backend must exist"),
-                naming_system_prompt(),
+                &naming_system_prompt(max_title_chars),
                 &user_prompt,
+                max_title_chars,
             ),
         })
     }
@@ -599,6 +608,7 @@ fn summarize_openai_blocking(
     config: &OpenAiBackend,
     model: &str,
     evidence: &TacticalEvidence,
+    limits: Option<&CardCharBudget>,
 ) -> Result<TacticalSynthesis, String> {
     let request_body = json!({
         "model": model,
@@ -606,7 +616,7 @@ fn summarize_openai_blocking(
         "messages": [
             {
                 "role": "system",
-                "content": tactical_system_prompt(),
+                "content": tactical_system_prompt(limits),
             },
             {
                 "role": "user",
@@ -621,7 +631,7 @@ fn summarize_openai_blocking(
             "json_schema": {
                 "name": "exaterm_tactical_summary",
                 "strict": true,
-                "schema": synthesis_schema(),
+                "schema": synthesis_schema(limits),
             }
         }
     });
@@ -650,13 +660,14 @@ fn summarize_openai_blocking(
     let text = extract_response_text(&payload)
         .ok_or_else(|| format!("response did not include parseable text: {payload}"))?;
     parse_json_output::<TacticalSynthesis>(&text, "model synthesis")
-        .map(TacticalSynthesis::sanitize)
+        .map(|s| s.sanitize(limits))
 }
 
 fn suggest_name_openai_blocking(
     config: &OpenAiBackend,
     model: &str,
     evidence: &NamingEvidence,
+    max_title_chars: Option<u16>,
 ) -> Result<NameSuggestion, String> {
     let request_body = json!({
         "model": model,
@@ -664,7 +675,7 @@ fn suggest_name_openai_blocking(
         "messages": [
             {
                 "role": "system",
-                "content": naming_system_prompt(),
+                "content": naming_system_prompt(max_title_chars),
             },
             {
                 "role": "user",
@@ -679,7 +690,7 @@ fn suggest_name_openai_blocking(
             "json_schema": {
                 "name": "exaterm_terminal_name",
                 "strict": true,
-                "schema": naming_schema(),
+                "schema": naming_schema(max_title_chars),
             }
         }
     });
@@ -708,7 +719,7 @@ fn suggest_name_openai_blocking(
     let text = extract_response_text(&payload)
         .ok_or_else(|| format!("response did not include parseable text: {payload}"))?;
     parse_json_output::<NameSuggestion>(&text, "model naming response")
-        .map(NameSuggestion::sanitize)
+        .map(|s| s.sanitize(max_title_chars))
 }
 
 fn suggest_nudge_openai_blocking(
@@ -806,38 +817,45 @@ fn summarize_cli_blocking(
     backend: &CliBackend,
     system_prompt: &str,
     user_prompt: &str,
+    limits: Option<&CardCharBudget>,
 ) -> Result<TacticalSynthesis, String> {
-    let text = run_codex_cli(backend, system_prompt, user_prompt, &synthesis_schema())?;
+    let text = run_codex_cli(backend, system_prompt, user_prompt, &synthesis_schema(limits))?;
     parse_json_output::<TacticalSynthesis>(&text, "codex synthesis")
-        .map(TacticalSynthesis::sanitize)
+        .map(|s| s.sanitize(limits))
 }
 
 fn summarize_claude_blocking(
     backend: &CliBackend,
     system_prompt: &str,
     user_prompt: &str,
+    limits: Option<&CardCharBudget>,
 ) -> Result<TacticalSynthesis, String> {
-    let text = run_claude_cli(backend, system_prompt, user_prompt, &synthesis_schema())?;
+    let text = run_claude_cli(backend, system_prompt, user_prompt, &synthesis_schema(limits))?;
     parse_json_output::<TacticalSynthesis>(&text, "claude synthesis")
-        .map(TacticalSynthesis::sanitize)
+        .map(|s| s.sanitize(limits))
 }
 
 fn suggest_name_cli_blocking(
     backend: &CliBackend,
     system_prompt: &str,
     user_prompt: &str,
+    max_title_chars: Option<u16>,
 ) -> Result<NameSuggestion, String> {
-    let text = run_codex_cli(backend, system_prompt, user_prompt, &naming_schema())?;
-    parse_json_output::<NameSuggestion>(&text, "codex naming").map(NameSuggestion::sanitize)
+    let text = run_codex_cli(backend, system_prompt, user_prompt, &naming_schema(max_title_chars))?;
+    parse_json_output::<NameSuggestion>(&text, "codex naming")
+        .map(|s| s.sanitize(max_title_chars))
 }
 
 fn suggest_name_claude_blocking(
     backend: &CliBackend,
     system_prompt: &str,
     user_prompt: &str,
+    max_title_chars: Option<u16>,
 ) -> Result<NameSuggestion, String> {
-    let text = run_claude_cli(backend, system_prompt, user_prompt, &naming_schema())?;
-    parse_json_output::<NameSuggestion>(&text, "claude naming").map(NameSuggestion::sanitize)
+    let text =
+        run_claude_cli(backend, system_prompt, user_prompt, &naming_schema(max_title_chars))?;
+    parse_json_output::<NameSuggestion>(&text, "claude naming")
+        .map(|s| s.sanitize(max_title_chars))
 }
 
 fn suggest_nudge_cli_blocking(
@@ -1032,7 +1050,19 @@ fn unique_temp_path(prefix: &str, extension: &str) -> std::path::PathBuf {
     ))
 }
 
-fn tactical_system_prompt() -> &'static str {
+fn tactical_system_prompt(limits: Option<&CardCharBudget>) -> String {
+    let base = tactical_system_prompt_base();
+    if let Some(l) = limits {
+        format!(
+            "{base}\n\nCharacter limits for this operator's display:\n- headline: at most {} characters\n- tactical_state_brief: at most {} characters\n- attention_brief: at most {} characters",
+            l.headline_chars, l.detail_chars, l.alert_chars
+        )
+    } else {
+        base.to_string()
+    }
+}
+
+fn tactical_system_prompt_base() -> &'static str {
     r#"
 You are a structured terminal-state synthesizer for Exaterm, a Linux supervision app used to watch multiple AI coding agents running in terminal sessions.
 
@@ -1104,7 +1134,16 @@ Writing guidance:
     .trim()
 }
 
-fn naming_system_prompt() -> &'static str {
+fn naming_system_prompt(max_title_chars: Option<u16>) -> String {
+    let base = naming_system_prompt_base();
+    if let Some(max) = max_title_chars {
+        format!("{base}\n\nThe operator's display can fit at most {max} characters for the session name.")
+    } else {
+        base.to_string()
+    }
+}
+
+fn naming_system_prompt_base() -> &'static str {
     r#"
 You are a terminal session naming system for Exaterm, a Linux app used to supervise AI coding agents running in terminal sessions.
 
@@ -1157,7 +1196,22 @@ Return JSON only.
     .trim()
 }
 
-fn synthesis_schema() -> Value {
+fn synthesis_schema(limits: Option<&CardCharBudget>) -> Value {
+    let headline_prop = if let Some(l) = limits {
+        json!({ "type": ["string", "null"], "maxLength": l.headline_chars })
+    } else {
+        json!({ "type": ["string", "null"] })
+    };
+    let detail_prop = if let Some(l) = limits {
+        json!({ "type": ["string", "null"], "maxLength": l.detail_chars })
+    } else {
+        json!({ "type": ["string", "null"] })
+    };
+    let alert_prop = if let Some(l) = limits {
+        json!({ "type": ["string", "null"], "maxLength": l.alert_chars })
+    } else {
+        json!({ "type": ["string", "null"] })
+    };
     json!({
         "type": "object",
         "properties": {
@@ -1165,13 +1219,13 @@ fn synthesis_schema() -> Value {
                 "type": "string",
                 "enum": ["idle", "stopped", "thinking", "working", "blocked", "failed", "complete", "detached"]
             },
-            "tactical_state_brief": { "type": ["string", "null"] },
+            "tactical_state_brief": detail_prop,
             "attention_level": {
                 "type": "string",
                 "enum": ["autopilot", "monitor", "guide", "intervene", "takeover"]
             },
-            "attention_brief": { "type": ["string", "null"] },
-            "headline": { "type": ["string", "null"] },
+            "attention_brief": alert_prop,
+            "headline": headline_prop,
         },
         "required": [
             "tactical_state",
@@ -1184,11 +1238,16 @@ fn synthesis_schema() -> Value {
     })
 }
 
-fn naming_schema() -> Value {
+fn naming_schema(max_title_chars: Option<u16>) -> Value {
+    let name_prop = if let Some(max) = max_title_chars {
+        json!({ "type": "string", "maxLength": max })
+    } else {
+        json!({ "type": "string" })
+    };
     json!({
         "type": "object",
         "properties": {
-            "name": { "type": "string" }
+            "name": name_prop
         },
         "required": ["name"],
         "additionalProperties": false
@@ -1251,14 +1310,14 @@ pub fn extract_response_text(payload: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_response_text, name_signature, normalize_naming_model, normalize_summary_model,
-        nudge_schema, nudge_signature, openai_chat_completions_url, run_command_with_input,
-        should_skip_repeated_paused_summary, summary_signature, summary_substantive_signature,
-        synthesis_schema, tactical_system_prompt, AttentionLevel, CliBackend, NameSuggestion,
-        NamingEvidence, NudgeEvidence, OpenAiBackend, ProviderPreferences,
-        SynthesisBackendRegistry, SynthesisProvider, TacticalEvidence, TacticalState,
-        TacticalSynthesis, DEFAULT_CLAUDE_CLI_MODEL, DEFAULT_CODEX_CLI_MODEL, DEFAULT_NAMING_MODEL,
-        DEFAULT_NUDGE_MODEL, DEFAULT_SUMMARY_MODEL,
+        extract_response_text, name_signature, naming_schema, naming_system_prompt,
+        normalize_naming_model, normalize_summary_model, nudge_schema, nudge_signature,
+        openai_chat_completions_url, run_command_with_input, should_skip_repeated_paused_summary,
+        summary_signature, summary_substantive_signature, synthesis_schema, tactical_system_prompt,
+        AttentionLevel, CardCharBudget, CliBackend, NameSuggestion, NamingEvidence, NudgeEvidence,
+        OpenAiBackend, ProviderPreferences, SynthesisBackendRegistry, SynthesisProvider,
+        TacticalEvidence, TacticalState, TacticalSynthesis, DEFAULT_CLAUDE_CLI_MODEL,
+        DEFAULT_CODEX_CLI_MODEL, DEFAULT_NAMING_MODEL, DEFAULT_NUDGE_MODEL, DEFAULT_SUMMARY_MODEL,
     };
     use serde_json::json;
     use std::collections::BTreeSet;
@@ -1826,7 +1885,7 @@ printf 'stdin:%s\n' "$input"
             attention_brief: Some(" keep watching this loop ".into()),
             headline: Some("  cargo   test parser ".into()),
         }
-        .sanitize();
+        .sanitize(None);
 
         assert_eq!(summary.headline.as_deref(), Some("cargo test parser"));
         assert_eq!(
@@ -1844,7 +1903,7 @@ printf 'stdin:%s\n' "$input"
         let suggestion = NameSuggestion {
             name: "  Parser recovery and trailing token fix loop  ".into(),
         }
-        .sanitize();
+        .sanitize(None);
 
         assert_eq!(suggestion.name, "Parser recovery and trailing token fix");
         assert!(suggestion.name.len() <= 40);
@@ -1852,7 +1911,7 @@ printf 'stdin:%s\n' "$input"
 
     #[test]
     fn name_suggestion_allows_empty_name() {
-        let suggestion = NameSuggestion { name: "   ".into() }.sanitize();
+        let suggestion = NameSuggestion { name: "   ".into() }.sanitize(None);
         assert!(suggestion.name.is_empty());
     }
 
@@ -1951,7 +2010,7 @@ printf 'stdin:%s\n' "$input"
             .unwrap_or_else(|| panic!("missing live summary fixture: {name}"));
 
         let summary = match registry
-            .summarize_blocking(&ProviderPreferences::default(), &evidence)
+            .summarize_blocking(&ProviderPreferences::default(), &evidence, None)
             .value
         {
             Ok(summary) => summary,
@@ -2432,7 +2491,7 @@ printf 'stdin:%s\n' "$input"
 
     #[test]
     fn tactical_prompt_requires_real_state_and_high_bar_for_complete() {
-        let prompt = tactical_system_prompt();
+        let prompt = tactical_system_prompt(None);
         assert!(prompt
             .contains("You must always choose a real tactical_state and a real attention_level."));
         assert!(prompt.contains("use complete rarely; the bar is high"));
@@ -2443,11 +2502,57 @@ printf 'stdin:%s\n' "$input"
 
     #[test]
     fn synthesis_schema_requires_non_null_tactical_state() {
-        let schema = synthesis_schema();
+        let schema = synthesis_schema(None);
         assert_eq!(schema["properties"]["tactical_state"]["type"], "string");
         let enum_values = schema["properties"]["tactical_state"]["enum"]
             .as_array()
             .expect("tactical_state enum should be an array");
         assert!(!enum_values.iter().any(serde_json::Value::is_null));
+    }
+
+    #[test]
+    fn synthesis_schema_with_limits_adds_max_length() {
+        let budget = CardCharBudget {
+            title_chars: 20,
+            headline_chars: 45,
+            detail_chars: 38,
+            alert_chars: 30,
+        };
+        let schema = synthesis_schema(Some(&budget));
+        assert_eq!(schema["properties"]["headline"]["maxLength"], 45u64);
+        assert_eq!(schema["properties"]["tactical_state_brief"]["maxLength"], 38u64);
+        assert_eq!(schema["properties"]["attention_brief"]["maxLength"], 30u64);
+    }
+
+    #[test]
+    fn naming_schema_with_max_adds_max_length() {
+        let schema = naming_schema(Some(25));
+        assert_eq!(schema["properties"]["name"]["maxLength"], 25u64);
+    }
+
+    #[test]
+    fn naming_schema_without_max_omits_max_length() {
+        let schema = naming_schema(None);
+        assert!(schema["properties"]["name"].get("maxLength").is_none());
+    }
+
+    #[test]
+    fn tactical_system_prompt_with_limits_embeds_caps() {
+        let budget = CardCharBudget {
+            title_chars: 20,
+            headline_chars: 45,
+            detail_chars: 38,
+            alert_chars: 30,
+        };
+        let prompt = tactical_system_prompt(Some(&budget));
+        assert!(prompt.contains("45"));
+        assert!(prompt.contains("38"));
+        assert!(prompt.contains("30"));
+    }
+
+    #[test]
+    fn naming_system_prompt_with_max_embeds_cap() {
+        let prompt = naming_system_prompt(Some(25));
+        assert!(prompt.contains("25"));
     }
 }

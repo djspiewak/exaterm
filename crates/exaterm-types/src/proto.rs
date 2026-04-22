@@ -1,5 +1,5 @@
 use crate::model::{SessionId, SessionRecord};
-use crate::synthesis::TacticalSynthesis;
+use crate::synthesis::{CardCharBudget, TacticalSynthesis};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -22,6 +22,10 @@ pub enum ClientMessage {
     ToggleAutoNudge {
         session_id: SessionId,
         enabled: bool,
+    },
+    ReportCardBudget {
+        session_id: SessionId,
+        budget: CardCharBudget,
     },
     DetachClient {
         keep_alive: bool,
@@ -88,6 +92,33 @@ mod tests {
                 assert_eq!(session_id, SessionId(7));
                 assert_eq!(rows, 31);
                 assert_eq!(cols, 97);
+            }
+            other => panic!("unexpected decoded message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn report_card_budget_round_trips_through_json() {
+        use crate::synthesis::CardCharBudget;
+        let message = ClientMessage::ReportCardBudget {
+            session_id: SessionId(3),
+            budget: CardCharBudget {
+                title_chars: 28,
+                headline_chars: 52,
+                detail_chars: 45,
+                alert_chars: 38,
+            },
+        };
+        let json = serde_json::to_string(&message).expect("serialize ReportCardBudget");
+        let decoded: ClientMessage =
+            serde_json::from_str(&json).expect("deserialize ReportCardBudget");
+        match decoded {
+            ClientMessage::ReportCardBudget { session_id, budget } => {
+                assert_eq!(session_id, SessionId(3));
+                assert_eq!(budget.title_chars, 28);
+                assert_eq!(budget.headline_chars, 52);
+                assert_eq!(budget.detail_chars, 45);
+                assert_eq!(budget.alert_chars, 38);
             }
             other => panic!("unexpected decoded message: {other:?}"),
         }

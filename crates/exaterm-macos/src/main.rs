@@ -103,6 +103,9 @@ fn run_app(mode: exaterm_ui::beachhead::RunMode) {
 
     // Store command sender for menu actions (thread-local, used by AppDelegate).
     app_delegate::set_command_sender(beachhead.commands().clone());
+    // Wire the same sender into the battlefield view for budget dispatch.
+    battlefield_view::set_budget_sender(beachhead.commands().clone());
+    focus_view::set_focus_budget_sender(beachhead.commands().clone());
 
     let beachhead = Rc::new(beachhead);
 

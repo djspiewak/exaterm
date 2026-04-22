@@ -26,10 +26,12 @@ use exaterm_core::synthesis::{
 };
 use exaterm_types::model::{SessionId, SessionLaunch, SessionRecord};
 use exaterm_types::proto::{ClientMessage, ObservationSnapshot, ServerMessage, WorkspaceSnapshot};
-use exaterm_types::synthesis::{AttentionLevel, NameSuggestion, TacticalState, TacticalSynthesis};
+use exaterm_types::synthesis::{
+    AttentionLevel, CardCharBudget, NameSuggestion, TacticalState, TacticalSynthesis,
+};
 use exaterm_ui::beachhead::{parse_run_mode, BeachheadTarget, RunMode};
 use exaterm_ui::layout::{
-    battlefield_can_embed_terminals, battlefield_columns,
+    battlefield_can_embed_terminals, battlefield_columns, card_char_budget,
     visible_scrollback_line_capacity as layout_visible_scrollback_line_capacity,
 };
 use exaterm_ui::presentation::{
@@ -352,7 +354,7 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
         .build();
     focus_title.set_single_line_mode(true);
     focus_title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    focus_title.set_max_width_chars(18);
+    focus_title.set_max_width_chars(CardCharBudget::DEFAULT_WORST_CASE.title_chars.into());
     let focus_status = gtk::Label::builder()
         .xalign(0.5)
         .css_classes(vec!["card-status".to_string(), "battle-active".to_string()])
@@ -370,7 +372,8 @@ fn build_ui(app: &gtk::Application, mode: RunMode) {
         .build();
     focus_headline.set_lines(2);
     focus_headline.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    focus_headline.set_max_width_chars(30);
+    focus_headline
+        .set_max_width_chars((CardCharBudget::DEFAULT_WORST_CASE.headline_chars / 2).into());
     let focus_attention_pill = gtk::Label::builder()
         .xalign(0.0)
         .visible(false)
@@ -769,7 +772,7 @@ pub(crate) fn build_test_ui(app: &gtk::Application, mode: RunMode) -> BuiltTestU
         .build();
     focus_title.set_single_line_mode(true);
     focus_title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    focus_title.set_max_width_chars(18);
+    focus_title.set_max_width_chars(CardCharBudget::DEFAULT_WORST_CASE.title_chars.into());
     let focus_status = gtk::Label::builder()
         .xalign(0.5)
         .css_classes(vec!["card-status".to_string(), "battle-active".to_string()])
@@ -787,7 +790,8 @@ pub(crate) fn build_test_ui(app: &gtk::Application, mode: RunMode) -> BuiltTestU
         .build();
     focus_headline.set_lines(2);
     focus_headline.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    focus_headline.set_max_width_chars(30);
+    focus_headline
+        .set_max_width_chars((CardCharBudget::DEFAULT_WORST_CASE.headline_chars / 2).into());
     let focus_attention_pill = gtk::Label::builder()
         .xalign(0.0)
         .visible(false)
@@ -1211,7 +1215,7 @@ fn build_battle_card_widgets(
         .build();
     title.set_single_line_mode(true);
     title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    title.set_max_width_chars(40);
+    title.set_max_width_chars(CardCharBudget::DEFAULT_WORST_CASE.title_chars.into());
     let status = gtk::Label::builder()
         .label("Active")
         .xalign(0.5)
@@ -1258,7 +1262,7 @@ fn build_battle_card_widgets(
         .build();
     headline.set_lines(2);
     headline.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    headline.set_max_width_chars(18);
+    headline.set_max_width_chars((CardCharBudget::DEFAULT_WORST_CASE.headline_chars / 2).into());
     let alert = gtk::Label::builder()
         .xalign(0.0)
         .wrap(true)
@@ -1445,6 +1449,34 @@ fn build_battle_card_widgets(
             activate_battlefield_card(&context, &row, session_id);
         });
         frame.add_controller(click);
+    }
+
+    // Dispatch ReportCardBudget when the card's pixel width changes.
+    {
+        let context = context.clone();
+        let session_id = session.id;
+        let title_label = title.clone();
+        let headline_label = headline.clone();
+        let last_width = std::rc::Rc::new(Cell::new(-1i32));
+        frame.connect_size_allocate(move |_, width, _, _| {
+            if last_width.get() == width {
+                return;
+            }
+            last_width.set(width);
+            let budget = card_char_budget(f64::from(width));
+            if let Some(beachhead) = context.beachhead.as_ref() {
+                let _ = beachhead.commands().send(ClientMessage::ReportCardBudget {
+                    session_id,
+                    budget,
+                });
+            }
+            let title_label = title_label.clone();
+            let headline_label = headline_label.clone();
+            glib::idle_add_local_once(move || {
+                title_label.set_max_width_chars(budget.title_chars.into());
+                headline_label.set_max_width_chars((budget.headline_chars / 2).into());
+            });
+        });
     }
 
     let terminal = vte::Terminal::builder()
@@ -1893,7 +1925,7 @@ fn spawn_summary_worker() -> Option<SummaryWorker> {
 
     thread::spawn(move || {
         while let Ok(job) = request_rx.recv() {
-            let summary = registry.summarize_blocking(&job.preferences, &job.evidence);
+            let summary = registry.summarize_blocking(&job.preferences, &job.evidence, None);
             let _ = result_tx.send(SummaryResult {
                 session_id: job.session_id,
                 signature: job.signature,
@@ -1916,7 +1948,8 @@ fn spawn_naming_worker() -> Option<NamingWorker> {
 
     thread::spawn(move || {
         while let Ok(job) = request_rx.recv() {
-            let suggestion = registry.suggest_name_blocking(&job.preferences, &job.evidence);
+            let suggestion =
+                registry.suggest_name_blocking(&job.preferences, &job.evidence, None);
             let _ = result_tx.send(NamingResult {
                 session_id: job.session_id,
                 signature: job.signature,
