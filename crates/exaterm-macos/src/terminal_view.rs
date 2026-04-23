@@ -35,6 +35,7 @@ const ALL_STATUSES: &[BattleCardStatus] = &[
 pub struct TerminalRenderState {
     // Card UI fonts (from theme).
     pub title_font: Retained<NSFont>,
+    pub subtitle_font: Retained<NSFont>,
     pub status_font: Retained<NSFont>,
     pub recency_font: Retained<NSFont>,
     pub headline_font: Retained<NSFont>,
@@ -46,6 +47,7 @@ pub struct TerminalRenderState {
 
     // Card UI colors (from theme CSS values).
     pub title_color: Retained<NSColor>,
+    pub subtitle_color: Retained<NSColor>,
     pub headline_color: Retained<NSColor>,
     pub detail_color: Retained<NSColor>,
     pub alert_color: Retained<NSColor>,
@@ -99,6 +101,7 @@ impl TerminalRenderState {
     pub fn new() -> Self {
         // Card UI fonts from theme specs.
         let title_font = style::font_from_spec(&theme::card_title_font());
+        let subtitle_font = style::font_from_spec(&theme::card_subtitle_font());
         let status_font = style::font_from_spec(&theme::card_status_font());
         let recency_font = style::font_from_spec(&theme::card_recency_font());
         let headline_font = style::font_from_spec(&theme::card_headline_font());
@@ -110,6 +113,7 @@ impl TerminalRenderState {
 
         // Card UI colors from theme CSS values.
         let title_color = style::color_to_nscolor(&theme::title_color());
+        let subtitle_color = style::color_to_nscolor(&theme::subtitle_color());
         let headline_color = style::color_to_nscolor(&theme::headline_color());
         let detail_color = style::color_to_nscolor(&theme::detail_color());
         let alert_color = style::color_to_nscolor(&theme::alert_color());
@@ -215,6 +219,7 @@ impl TerminalRenderState {
 
         Self {
             title_font,
+            subtitle_font,
             status_font,
             recency_font,
             headline_font,
@@ -224,6 +229,7 @@ impl TerminalRenderState {
             bar_caption_font,
             bar_reason_font,
             title_color,
+            subtitle_color,
             headline_color,
             detail_color,
             alert_color,

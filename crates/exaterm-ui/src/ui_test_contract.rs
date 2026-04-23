@@ -103,8 +103,16 @@ pub mod selectors {
         format!("{}.nudge", battlefield_card(session))
     }
 
+    pub fn battlefield_card_subtitle(session: UiSessionKey) -> String {
+        format!("{}.subtitle", battlefield_card(session))
+    }
+
     pub fn battlefield_card_attention_bar(session: UiSessionKey) -> String {
         format!("{}.attention-bar", battlefield_card(session))
+    }
+
+    pub fn battlefield_card_attention_bar_reason(session: UiSessionKey) -> String {
+        format!("{}.attention-bar.reason", battlefield_card(session))
     }
 
     pub fn battlefield_card_scrollback(session: UiSessionKey) -> String {
@@ -406,6 +414,14 @@ mod tests {
         assert_eq!(
             selectors::battlefield_card_title(UiSessionKey::Shell1),
             "battlefield.card.shell-1.title"
+        );
+        assert_eq!(
+            selectors::battlefield_card_subtitle(UiSessionKey::Shell1),
+            "battlefield.card.shell-1.subtitle"
+        );
+        assert_eq!(
+            selectors::battlefield_card_attention_bar_reason(UiSessionKey::Shell2),
+            "battlefield.card.shell-2.attention-bar.reason"
         );
         assert_eq!(
             selectors::focus_card_attention_pill(UiSessionKey::Shell4),

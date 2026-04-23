@@ -77,12 +77,14 @@ fn appkit_weight(css_weight: u16) -> f64 {
 /// Monospace specs use `monospacedSystemFontOfSize_weight`; proportional specs
 /// use `systemFontOfSize_weight`. The CSS weight is translated via `appkit_weight`.
 pub fn font_from_spec(spec: &FontSpec) -> Retained<NSFont> {
-    let size = f64::from(spec.size);
+    // Theme FontSpec sizes are CSS px; AppKit uses points. At 96 dpi, 1pt = 96/72 px,
+    // so 1 CSS px = 72/96 = 0.75 pt.
+    let pt_size = f64::from(spec.size) * 0.75;
     let weight = appkit_weight(spec.weight);
     if spec.monospace {
-        NSFont::monospacedSystemFontOfSize_weight(size, weight)
+        NSFont::monospacedSystemFontOfSize_weight(pt_size, weight)
     } else {
-        NSFont::systemFontOfSize_weight(size, weight)
+        NSFont::systemFontOfSize_weight(pt_size, weight)
     }
 }
 
@@ -328,14 +330,15 @@ mod tests {
     #[test]
     fn font_from_spec_card_title_does_not_panic() {
         let f = font_from_spec(&exaterm_ui::theme::card_title_font());
-        // Title font is 18pt.
-        assert!((f.pointSize() - 18.0).abs() < 0.5);
+        // Title theme size is 18 CSS px; after px→pt (×0.75) expect 13.5pt.
+        assert!((f.pointSize() - 13.5).abs() < 0.5);
     }
 
     #[test]
     fn font_from_spec_scrollback_does_not_panic() {
         let f = font_from_spec(&exaterm_ui::theme::scrollback_line_font());
-        assert!((f.pointSize() - 11.0).abs() < 0.5);
+        // Scrollback theme size is 11 CSS px; after px→pt (×0.75) expect 8.25pt.
+        assert!((f.pointSize() - 8.25).abs() < 0.5);
     }
 
     #[test]

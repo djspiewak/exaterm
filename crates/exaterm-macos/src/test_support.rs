@@ -422,13 +422,6 @@ mod imp {
                     ));
                 }
                 if let Some(headline) = regions.headline {
-                    let label = if embedded_ids.contains(&card.id) && !card.headline.is_empty() {
-                        card.headline.clone()
-                    } else if !card.combined_headline.is_empty() {
-                        card.combined_headline.clone()
-                    } else {
-                        card.headline.clone()
-                    };
                     nodes.push(node(
                         &format!("battlefield-card-headline-{}", key.slug()),
                         &selectors::battlefield_card_headline(key),
@@ -437,7 +430,19 @@ mod imp {
                             self.battlefield_view.frame(),
                             headline,
                         )),
-                        Some(label),
+                        Some(card.headline.clone()),
+                    ));
+                }
+                if let Some(subtitle) = regions.subtitle {
+                    nodes.push(node(
+                        &format!("battlefield-card-subtitle-{}", key.slug()),
+                        &selectors::battlefield_card_subtitle(key),
+                        Role::Label,
+                        rect_from_nsrect(rect_in_root_from_flipped_local(
+                            self.battlefield_view.frame(),
+                            subtitle,
+                        )),
+                        Some(card.headline.clone()),
                     ));
                 }
                 if let Some(alert) = regions.alert {
@@ -477,6 +482,20 @@ mod imp {
                         )),
                         card.attention_bar_reason.clone(),
                     ));
+                }
+                if let Some(attention_bar_reason) = regions.attention_bar_reason {
+                    if let Some(reason) = card.attention_bar_reason.clone() {
+                        nodes.push(node(
+                            &format!("battlefield-card-attention-bar-reason-{}", key.slug()),
+                            &selectors::battlefield_card_attention_bar_reason(key),
+                            Role::Label,
+                            rect_from_nsrect(rect_in_root_from_flipped_local(
+                                self.battlefield_view.frame(),
+                                attention_bar_reason,
+                            )),
+                            Some(reason),
+                        ));
+                    }
                 }
                 if let Some(scrollback) = regions.scrollback {
                     let scrollback_text = battlefield_view::scrollback_lines(card)
@@ -666,10 +685,12 @@ mod imp {
     struct BattlefieldRegions {
         title: Option<NSRect>,
         status: Option<NSRect>,
+        subtitle: Option<NSRect>,
         headline: Option<NSRect>,
         alert: Option<NSRect>,
         nudge: Option<NSRect>,
         attention_bar: Option<NSRect>,
+        attention_bar_reason: Option<NSRect>,
         scrollback: Option<NSRect>,
         terminal_slot: Option<NSRect>,
         hit_target: NSRect,
@@ -686,13 +707,16 @@ mod imp {
         let pad_y = 14.0;
         let mut y_cursor = card_rect.origin.y + pad_y;
         let content_width = card_rect.size.width - 32.0;
+        let header_right_edge = card_rect.origin.x + card_rect.size.width - pad_x;
         let mut regions = BattlefieldRegions {
             title: None,
             status: None,
+            subtitle: None,
             headline: None,
             alert: None,
             nudge: None,
             attention_bar: None,
+            attention_bar_reason: None,
             scrollback: None,
             terminal_slot: None,
             hit_target: NSRect::new(
@@ -704,73 +728,55 @@ mod imp {
             ),
         };
 
+        // Row 1: Title (left) + Status chip (right-anchored).
         if chrome.title_visible {
+            if chrome.status_visible {
+                let chip_w = card.status_label.len() as f64 * 7.0 + 16.0;
+                let chip_x = header_right_edge - chip_w;
+                regions.status = Some(NSRect::new(
+                    NSPoint::new(chip_x, y_cursor),
+                    NSSize::new(chip_w, 20.0),
+                ));
+            }
+            let title_max_w = if chrome.status_visible {
+                let chip_w = card.status_label.len() as f64 * 7.0 + 16.0;
+                (header_right_edge - chip_w - 8.0 - (card_rect.origin.x + pad_x)).max(0.0)
+            } else {
+                content_width
+            };
             regions.title = Some(NSRect::new(
                 NSPoint::new(card_rect.origin.x + pad_x, y_cursor),
-                NSSize::new(content_width, 22.0),
+                NSSize::new(title_max_w, 22.0),
             ));
             y_cursor += if focused_mode { 20.0 } else { 24.0 };
         }
-        if chrome.status_visible {
-            let chip_w = card.status_label.len() as f64 * 7.0 + 16.0;
-            regions.status = Some(NSRect::new(
-                NSPoint::new(card_rect.origin.x + pad_x, y_cursor),
-                NSSize::new(chip_w, 20.0),
-            ));
-            y_cursor += 24.0;
-            y_cursor += if focused_mode { 4.0 } else { 8.0 };
-        }
 
-        let headline = if embedded_terminal && !card.headline.is_empty() {
-            &card.headline
-        } else if !card.combined_headline.is_empty() {
-            &card.combined_headline
-        } else {
-            &card.headline
-        };
-        if chrome.headline_visible && !headline.is_empty() {
-            regions.headline = Some(NSRect::new(
-                NSPoint::new(card_rect.origin.x + pad_x, y_cursor),
-                NSSize::new(content_width, 42.0),
-            ));
-            y_cursor += if focused_mode {
-                28.0
-            } else if embedded_terminal {
-                24.0
-            } else {
-                38.0
-            };
-        }
-        if chrome.headline_visible
-            && card
-                .detail
-                .as_deref()
-                .is_some_and(|detail| !detail.is_empty() && !embedded_terminal)
-        {
-            y_cursor += 32.0;
-        }
-        if chrome.headline_visible && card.alert.as_deref().is_some_and(|alert| !alert.is_empty()) {
-            regions.alert = Some(NSRect::new(
-                NSPoint::new(card_rect.origin.x + pad_x, y_cursor),
-                NSSize::new(content_width, 24.0),
-            ));
-            y_cursor += 24.0;
-        }
-
-        if focused_mode {
-            y_cursor += 4.0;
-        } else {
+        // Row 2: Subtitle/concise headline (left) + Nudge chip (right-anchored).
+        if chrome.headline_visible && !card.headline.is_empty() {
             if chrome.nudge_state_visible {
-                let width = card.nudge_state.label.len() as f64 * 6.9 + 18.0;
+                let nudge_w = card.nudge_state.label.len() as f64 * 6.9 + 18.0;
+                let nudge_x = header_right_edge - nudge_w;
                 regions.nudge = Some(NSRect::new(
-                    NSPoint::new(
-                        card_rect.origin.x + card_rect.size.width - 164.0,
-                        y_cursor - 2.0,
-                    ),
-                    NSSize::new(width, 22.0),
+                    NSPoint::new(nudge_x, y_cursor - 2.0),
+                    NSSize::new(nudge_w, 22.0),
                 ));
             }
-            y_cursor += 26.0;
+            let subtitle_max_w = if chrome.nudge_state_visible {
+                let nudge_w = card.nudge_state.label.len() as f64 * 6.9 + 18.0;
+                (header_right_edge - nudge_w - 8.0 - (card_rect.origin.x + pad_x)).max(0.0)
+            } else {
+                content_width
+            };
+            // subtitle height 18 < title height 22 — encodes typographic subordination.
+            let subtitle_rect = NSRect::new(
+                NSPoint::new(card_rect.origin.x + pad_x, y_cursor),
+                NSSize::new(subtitle_max_w, 18.0),
+            );
+            regions.subtitle = Some(subtitle_rect);
+            regions.headline = Some(subtitle_rect);
+            y_cursor += 24.0;
+        } else if focused_mode {
+            y_cursor += 4.0;
         }
 
         if embedded_terminal {
@@ -785,10 +791,18 @@ mod imp {
                 NSSize::new(slot.w, slot.h),
             ));
             if chrome.bars_visible && card.attention_bar.is_some() {
-                regions.attention_bar = Some(NSRect::new(
-                    NSPoint::new(card_rect.origin.x + pad_x, (slot.y - 52.0).max(y_cursor)),
+                let bar_y = (slot.y - 52.0).max(y_cursor);
+                let bar_rect = NSRect::new(
+                    NSPoint::new(card_rect.origin.x + pad_x, bar_y),
                     NSSize::new(content_width, 56.0),
-                ));
+                );
+                regions.attention_bar = Some(bar_rect);
+                if card.attention_bar_reason.as_deref().is_some_and(|r| !r.is_empty()) {
+                    regions.attention_bar_reason = Some(NSRect::new(
+                        NSPoint::new(bar_rect.origin.x, bar_rect.origin.y + 32.0),
+                        NSSize::new(content_width, 42.0),
+                    ));
+                }
             }
             return regions;
         }
@@ -804,10 +818,17 @@ mod imp {
         }
 
         if chrome.bars_visible && card.attention_bar.is_some() {
-            regions.attention_bar = Some(NSRect::new(
+            let bar_rect = NSRect::new(
                 NSPoint::new(card_rect.origin.x + pad_x, y_cursor),
                 NSSize::new(content_width, 56.0),
-            ));
+            );
+            regions.attention_bar = Some(bar_rect);
+            if card.attention_bar_reason.as_deref().is_some_and(|r| !r.is_empty()) {
+                regions.attention_bar_reason = Some(NSRect::new(
+                    NSPoint::new(bar_rect.origin.x, bar_rect.origin.y + 32.0),
+                    NSSize::new(content_width, 42.0),
+                ));
+            }
         }
 
         regions

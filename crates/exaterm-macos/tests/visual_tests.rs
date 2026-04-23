@@ -230,10 +230,9 @@ fn attention_bar_calm_is_gradient(mtm: MainThreadMarker) {
     card.attention_bar_reason = Some("Low priority monitoring".to_string());
     let image = render_battlefield(mtm, vec![card], None, CARD_SIZE);
 
-    // The attention bar segments are drawn below the content area
-    // Layout: title(26) + 24 + chip(24) + 8 + headline(38) + caption(18) ≈ 138
-    // Segments are approximately at y ≈ 138-160
-    let segment_y: u32 = 150;
+    // The attention bar segments are drawn below the header rows.
+    // Layout: title(26) + 24 + subtitle(50) + 24 = y≈74; caption(18) → segments at y≈92.
+    let segment_y: u32 = 92;
     let left_avg = sample_region_avg(&image, 20, segment_y, 15, 6);
     let right_avg = sample_region_avg(&image, 80, segment_y, 15, 6);
 
@@ -257,10 +256,11 @@ fn attention_bar_calm_is_gradient(mtm: MainThreadMarker) {
 
 /// Render a card with known title text. Assert that the top region has bright text pixels.
 fn title_renders_at_top_of_card(mtm: MainThreadMarker) {
-    let card = make_card(BattleCardStatus::Active, "Test Title Session", "");
+    // Card needs a non-empty headline so that summarized=true and title_visible=true.
+    let card = make_card(BattleCardStatus::Active, "Test Title Session", "Headline");
     let image = render_battlefield(mtm, vec![card], None, CARD_SIZE);
 
-    // Title should be in the top region: y offset ~14-38 from card top (12 margin + 14 pad)
+    // Title is Row 1: card.y(12) + pad_y(14) = y≈26.
     assert!(
         has_text_content(&image, 28, 26, 300, 22, 0.02),
         "title text should be visible at top of card"
@@ -279,48 +279,43 @@ fn status_chip_renders_below_title(mtm: MainThreadMarker) {
     );
 }
 
-/// Render card with a known headline. Assert headline region contains text.
+/// Render card with a known headline. Assert headline/subtitle region contains text.
 fn headline_text_rendered_and_positioned(mtm: MainThreadMarker) {
     let card = make_card(BattleCardStatus::Active, "Test", "Build passing steadily");
     let image = render_battlefield(mtm, vec![card], None, CARD_SIZE);
 
-    // Headline should be below status chip, roughly y=80-120 from top
+    // Subtitle row is Row 2: after title row (y=26+24=50). Headline text renders at y≈50.
     assert!(
-        has_text_content(&image, 28, 78, 350, 30, 0.02),
-        "headline text should be rendered below status chip"
+        has_text_content(&image, 28, 50, 350, 25, 0.02),
+        "headline text should be rendered as subtitle (Row 2) below title"
     );
 }
 
-/// Render card with detail text. Assert the detail region has text.
-/// Render card without detail text. Assert that the card with detail
-/// has more content (text extends further down the card).
+/// Render card with/without detail text. Verify that detail is not surfaced above TTY.
+///
+/// The new GTK-aligned layout drops `detail` from the above-TTY header region.
+/// Both cards render the same two-row header (title + subtitle/headline).
 fn detail_text_rendered_when_present(mtm: MainThreadMarker) {
-    let mut card = make_card(BattleCardStatus::Active, "Test", "Headline");
-    card.detail = Some("Steady progress on compilation".to_string());
-    let image_with = render_battlefield(mtm, vec![card], None, CARD_SIZE);
+    let mut card_with = make_card(BattleCardStatus::Active, "Test", "Headline");
+    card_with.detail = Some("Steady progress on compilation".to_string());
+    let image_with = render_battlefield(mtm, vec![card_with], None, CARD_SIZE);
 
-    let mut card_without = make_card(BattleCardStatus::Active, "Test", "Headline");
-    card_without.detail = None;
+    let card_without = make_card(BattleCardStatus::Active, "Test", "Headline");
     let image_without = render_battlefield(mtm, vec![card_without], None, CARD_SIZE);
 
-    // Detail is rendered between headline and recency. With detail, the content
-    // in the y=120-150 region is the detail text. Without detail, that region
-    // shifts up. Check that the with-detail card has bright content in a region
-    // that the without-detail card does not.
-    let detail_y = 120;
+    // Both cards should have subtitle row text at y≈50 (headline is the subtitle).
     assert!(
-        has_text_content(&image_with, 28, detail_y, 350, 25, 0.01),
-        "detail text should be visible when present"
+        has_text_content(&image_with, 28, 50, 350, 25, 0.01),
+        "subtitle row should render headline text even when detail is set"
     );
 
-    // The card with detail has more total bright content below the headline
-    // (detail + recency vs just recency). Compare bright pixel fractions in
-    // the extended content region.
-    let with_bright = bright_content_in_region(&image_with, 28, 120, 350, 60);
-    let without_bright = bright_content_in_region(&image_without, 28, 120, 350, 60);
+    // Detail is dropped from the header; the region below the subtitle row (y=74+)
+    // should NOT have extra content from the detail field.
+    let with_bright = bright_content_in_region(&image_with, 28, 74, 350, 30);
+    let without_bright = bright_content_in_region(&image_without, 28, 74, 350, 30);
     assert!(
-        with_bright > without_bright,
-        "card with detail ({:.4}) should have more content than without ({:.4})",
+        (with_bright - without_bright).abs() < 0.01,
+        "detail field should not add above-TTY content: with={:.4} without={:.4}",
         with_bright,
         without_bright,
     );
@@ -357,28 +352,34 @@ fn bright_content_in_region(
     }
 }
 
-/// Render card with alert. Assert text in alert region with "!" prefix.
+/// Render card with alert. Verify alert is not surfaced in the above-TTY header.
+///
+/// The new GTK-aligned layout drops `alert` from the above-TTY header region.
+/// The subtitle row renders only the headline text.
 fn alert_text_rendered_with_prefix(mtm: MainThreadMarker) {
     let mut card = make_card(BattleCardStatus::Active, "Test", "Headline");
     card.alert = Some("Process stuck, needs input".to_string());
     let image = render_battlefield(mtm, vec![card], None, CARD_SIZE);
 
-    // Alert should be rendered below other content, roughly y=120-150
+    // Subtitle row (Row 2) should still render at y≈50 with the headline text.
     assert!(
-        has_text_content(&image, 28, 120, 350, 30, 0.01),
-        "alert text should be rendered"
+        has_text_content(&image, 28, 50, 350, 25, 0.01),
+        "subtitle row should render headline text (alert is excluded from above-TTY header)"
     );
 }
 
-/// Render card with recency text. Assert text exists in the recency row region.
+/// Render card; verify that the subtitle row is the last above-TTY text row.
+///
+/// Recency is dropped from the above-TTY header in the new GTK-aligned layout.
+/// Row 2 (subtitle) ends at y≈74; the area below should be empty until scrollback.
 fn recency_label_positioned_after_content(mtm: MainThreadMarker) {
     let card = make_card(BattleCardStatus::Active, "Test", "Headline");
     let image = render_battlefield(mtm, vec![card], None, CARD_SIZE);
 
-    // Recency row is after content: title(26) + 24 + chip(24) + 8 + headline(38) ≈ 120
+    // Subtitle row ends at y≈74. With no scrollback, y=74..110 should be card background.
     assert!(
-        has_text_content(&image, 28, 118, 200, 30, 0.01),
-        "recency label should be rendered"
+        !has_text_content(&image, 28, 74, 200, 40, 0.01),
+        "no above-TTY content below subtitle row (recency is excluded from new layout)"
     );
 }
 
@@ -389,10 +390,10 @@ fn scrollback_uses_monospace_proportions(mtm: MainThreadMarker) {
     card.scrollback = vec!["WWWWWWWW".to_string(), "iiiiiiii".to_string()];
     let image = render_battlefield(mtm, vec![card], None, CARD_SIZE);
 
-    // The scrollback region should contain text
-    // After headline(~120) + recency(~26) + gap, transcript starts at ~155
+    // The scrollback region should contain text.
+    // Layout: title row (~26–50) + subtitle row (~50–74); scrollback band starts at ~74.
     assert!(
-        has_text_content(&image, 28, 155, 350, 60, 0.01),
+        has_text_content(&image, 28, 74, 350, 60, 0.01),
         "scrollback lines should be rendered in the transcript area"
     );
 }
@@ -424,11 +425,11 @@ fn scrollback_long_line_wraps_to_second_display_row(mtm: MainThreadMarker) {
     card.scrollback = vec!["A".repeat(120)];
     let image = render_battlefield(mtm, vec![card], None, CARD_SIZE);
 
-    // Band starts at y≈155; first display-row text at y≈165, second at y≈183.
+    // Band starts at y≈74; first display-row text at y≈82, second at y≈100.
     // Without wrapping there is no second row inside the band.
     assert!(
-        has_text_content(&image, 26, 183, 200, 18, 0.01),
-        "120-char scrollback line should wrap to a second display row at y≈183"
+        has_text_content(&image, 26, 100, 200, 18, 0.01),
+        "120-char scrollback line should wrap to a second display row at y≈100"
     );
 }
 
@@ -442,10 +443,10 @@ fn attention_bar_label_rendered(mtm: MainThreadMarker) {
     });
     let image = render_battlefield(mtm, vec![card], None, CARD_SIZE);
 
-    // The caption "ATTENTION CONDITION" should be visible above the bar segments
-    // This is in the lower part of the card
+    // The caption "ATTENTION CONDITION" should be visible above the bar segments.
+    // Layout: title(~26–50) + subtitle(~50–74); attention bar starts at y≈74.
     assert!(
-        has_text_content(&image, 28, 160, 300, 20, 0.01),
+        has_text_content(&image, 28, 74, 300, 20, 0.01),
         "ATTENTION CONDITION label should be rendered"
     );
 }
@@ -460,13 +461,13 @@ fn nudge_chip_renders_on_right(mtm: MainThreadMarker) {
     };
     let image = render_battlefield(mtm, vec![card], None, CARD_SIZE);
 
-    // Nudge chip should be on the right side of the recency row
-    // The card is ~476px wide, nudge chip is at card.x + card.w - 164
-    // Recency row is at y ≈ 118 (title + chip + headline ≈ 120)
+    // Nudge chip should be on the right side of the subtitle row.
+    // The card is ~476px wide; nudge_x ≈ card.right - chip_w ≈ 350.
+    // Row 2 (subtitle+nudge) starts at y≈48 (nudge drawn at y_cursor-2 = 48).
     let nudge_x = (CARD_SIZE.width as u32).saturating_sub(180);
     assert!(
-        has_text_content(&image, nudge_x, 118, 160, 25, 0.01),
-        "nudge chip should render on right side of recency row"
+        has_text_content(&image, nudge_x, 48, 160, 25, 0.01),
+        "nudge chip should render on right side of subtitle row"
     );
 }
 

@@ -197,6 +197,128 @@ mod imp {
             &selectors::battlefield_card_nudge(UiSessionKey::Shell1),
             "AUTONUDGE",
         );
+
+        // === Group 1: Concise-line text and typography parity ===
+
+        assert_exists(
+            &scene,
+            &selector(&selectors::battlefield_card_subtitle(UiSessionKey::Shell1)),
+        )
+        .unwrap();
+        assert_text_contains(
+            &scene,
+            &selectors::battlefield_card_subtitle(UiSessionKey::Shell1),
+            "Parser recovery narrowed to one failing transition",
+        );
+
+        // Subtitle must be typographically subordinate to title (smaller rendered height).
+        let subtitle_height = scene
+            .resolve(&selector(&selectors::battlefield_card_subtitle(
+                UiSessionKey::Shell1,
+            )))
+            .unwrap()
+            .bounds
+            .size
+            .height;
+        let title_height = scene
+            .resolve(&selector(&selectors::battlefield_card_title(
+                UiSessionKey::Shell1,
+            )))
+            .unwrap()
+            .bounds
+            .size
+            .height;
+        assert!(
+            subtitle_height < title_height,
+            "subtitle rect height ({subtitle_height}) should be less than title height ({title_height})"
+        );
+
+        // === Group 2: Long summary placement ===
+
+        assert_exists(
+            &scene,
+            &selector(&selectors::battlefield_card_attention_bar_reason(
+                UiSessionKey::Shell1,
+            )),
+        )
+        .unwrap();
+        assert_text_contains(
+            &scene,
+            &selectors::battlefield_card_attention_bar_reason(UiSessionKey::Shell1),
+            "One failure remains on the recovery path.",
+        );
+
+        // attention_bar_reason must not spatially overlap the subtitle (one is below TTY,
+        // one is above).
+        let attention_bar_reason_bounds = scene
+            .resolve(&selector(&selectors::battlefield_card_attention_bar_reason(
+                UiSessionKey::Shell1,
+            )))
+            .unwrap()
+            .bounds;
+        let subtitle_bounds = scene
+            .resolve(&selector(&selectors::battlefield_card_subtitle(
+                UiSessionKey::Shell1,
+            )))
+            .unwrap()
+            .bounds;
+        assert!(
+            !rects_overlap(attention_bar_reason_bounds, subtitle_bounds),
+            "attention_bar_reason should not overlap subtitle (must be on opposite side of TTY)"
+        );
+
+        // === Group 3: Chip corner placement + non-overlap ===
+
+        let status_bounds = scene
+            .resolve(&selector(&selectors::battlefield_card_status(
+                UiSessionKey::Shell1,
+            )))
+            .unwrap()
+            .bounds;
+        let nudge_bounds = scene
+            .resolve(&selector(&selectors::battlefield_card_nudge(
+                UiSessionKey::Shell1,
+            )))
+            .unwrap()
+            .bounds;
+        let title_bounds = scene
+            .resolve(&selector(&selectors::battlefield_card_title(
+                UiSessionKey::Shell1,
+            )))
+            .unwrap()
+            .bounds;
+
+        assert!(
+            !rects_overlap(status_bounds, title_bounds),
+            "status chip must not overlap title text"
+        );
+        assert!(
+            !rects_overlap(nudge_bounds, subtitle_bounds),
+            "nudge chip must not overlap subtitle text"
+        );
+        assert!(
+            !rects_overlap(status_bounds, nudge_bounds),
+            "status and nudge chips must not overlap each other"
+        );
+
+        // === Group 4: No duplicate long summary above the TTY ===
+
+        // The above-TTY headline slot must show only the concise headline, not the
+        // concatenated attention_brief.
+        let headline_selector = selectors::battlefield_card_headline(UiSessionKey::Shell1);
+        if scene.count(&selector(&headline_selector)) > 0 {
+            let headline_label = scene
+                .resolve(&selector(&headline_selector))
+                .unwrap()
+                .node
+                .label
+                .clone()
+                .unwrap_or_default();
+            assert!(
+                !headline_label.contains("One failure remains on the recovery path."),
+                "above-TTY headline must not contain the long attention brief; got: {headline_label:?}"
+            );
+        }
     }
 
     fn battlefield_four_mixed() {

@@ -325,125 +325,66 @@ fn draw_card(
     let content_width = rect.w - 32.0;
     let chrome = card_chrome_visibility(card, focused_mode);
 
-    // Title — clamp to live budget so no mid-word clip at rounded-rect edge.
+    let header_right_edge = rect.x + rect.w - pad_x;
+
+    // Row 1: Title (left) + Status chip (right-anchored, same row).
     if chrome.title_visible {
-        let title =
-            truncate_with_ellipsis(&card.title, budget.title_chars.into());
-        let title_str =
-            build_simple_attr_string(&title, &render.title_font, &render.title_color);
-        title_str.drawAtPoint(NSPoint {
-            x: rect.x + pad_x,
-            y: y_cursor,
-        });
+        let title = truncate_with_ellipsis(&card.title, budget.title_chars.into());
+
+        if chrome.status_visible {
+            let chip_w = card.status_label.len() as f64 * 7.0 + 16.0;
+            let chip_x = header_right_edge - chip_w;
+            let mut status_y = y_cursor;
+            draw_status_chip(&card.status_label, card.status, chip_x, &mut status_y, render);
+        }
+
+        let title_max_w = if chrome.status_visible {
+            let chip_w = card.status_label.len() as f64 * 7.0 + 16.0;
+            (header_right_edge - chip_w - 8.0 - (rect.x + pad_x)).max(0.0)
+        } else {
+            content_width
+        };
+        let title_str = build_simple_attr_string(&title, &render.title_font, &render.title_color);
+        title_str.drawInRect(NSRect::new(
+            NSPoint::new(rect.x + pad_x, y_cursor),
+            NSSize::new(title_max_w, 22.0),
+        ));
         y_cursor += if focused_mode { 20.0 } else { 24.0 };
     }
 
-    if chrome.status_visible {
-        draw_status_chip(
-            &card.status_label,
-            card.status,
-            rect.x + pad_x,
-            &mut y_cursor,
-            render,
-        );
-        if let Some(attention) = card.attention {
-            draw_attention_chip(
-                attention.label,
-                attention.fill,
-                rect.x + rect.w - 132.0,
-                &mut y_cursor,
-                render,
-            );
-        }
-        y_cursor += if focused_mode { 4.0 } else { 8.0 };
-    }
-
-    // Headline (synthesis) — clamp to live budget.
-    let raw_headline = if embedded_terminal && !card.headline.is_empty() {
-        &card.headline
-    } else if !card.combined_headline.is_empty() {
-        &card.combined_headline
-    } else {
-        &card.headline
-    };
-    let headline_clamped;
-    let headline = if !raw_headline.is_empty() {
-        headline_clamped =
-            truncate_with_ellipsis(raw_headline, budget.headline_chars.into());
-        &*headline_clamped
-    } else {
-        raw_headline.as_str()
-    };
+    // Row 2: Subtitle/concise headline (left) + Nudge chip (right-anchored, same row).
+    // Uses card.headline only — the long attention_brief lives below the TTY.
+    let headline = &card.headline;
     if chrome.headline_visible && !headline.is_empty() {
-        let headline_str =
-            build_simple_attr_string(headline, &render.headline_font, &render.headline_color);
-        headline_str.drawInRect(NSRect::new(
-            NSPoint {
-                x: rect.x + pad_x,
-                y: y_cursor,
-            },
-            NSSize {
-                width: rect.w - 32.0,
-                height: 42.0,
-            },
-        ));
-        y_cursor += if focused_mode {
-            28.0
-        } else if embedded_terminal {
-            24.0
-        } else {
-            38.0
-        };
-    }
+        let headline_clamped = truncate_with_ellipsis(headline, budget.headline_chars.into());
 
-    if let Some(ref detail) = card.detail {
-        if chrome.headline_visible && !detail.is_empty() && !embedded_terminal {
-            let detail = truncate_with_ellipsis(detail, budget.detail_chars.into());
-            let detail_str =
-                build_simple_attr_string(&detail, &render.detail_font, &render.detail_color);
-            detail_str.drawInRect(NSRect::new(
-                NSPoint::new(rect.x + pad_x, y_cursor),
-                NSSize::new(content_width, 42.0),
-            ));
-            y_cursor += 32.0;
-        }
-    }
-
-    // Alert.
-    if let Some(ref alert_text) = card.alert {
-        if chrome.headline_visible && !alert_text.is_empty() {
-            let alert_text = truncate_with_ellipsis(alert_text, (budget.alert_chars as usize).saturating_sub(2));
-            let alert_line = format!("! {}", alert_text);
-            let alert_str =
-                build_simple_attr_string(&alert_line, &render.alert_font, &render.alert_color);
-            alert_str.drawInRect(NSRect::new(
-                NSPoint::new(rect.x + pad_x, y_cursor),
-                NSSize::new(content_width, 32.0),
-            ));
-            y_cursor += 24.0;
-        }
-    }
-
-    // Recency + control/nudge chip.
-    if focused_mode {
-        y_cursor += 4.0;
-    } else {
-        let recency_str =
-            build_simple_attr_string(&card.recency, &render.recency_font, &render.recency_color);
-        recency_str.drawAtPoint(NSPoint {
-            x: rect.x + pad_x,
-            y: y_cursor,
-        });
         if chrome.nudge_state_visible {
+            let nudge_w = card.nudge_state.label.len() as f64 * 6.9 + 18.0;
+            let nudge_x = header_right_edge - nudge_w;
             draw_nudge_chip(
                 card.nudge_state.label,
                 card.nudge_state.tone,
-                rect.x + rect.w - 164.0,
+                nudge_x,
                 y_cursor - 2.0,
                 render,
             );
         }
-        y_cursor += 26.0;
+
+        let subtitle_max_w = if chrome.nudge_state_visible {
+            let nudge_w = card.nudge_state.label.len() as f64 * 6.9 + 18.0;
+            (header_right_edge - nudge_w - 8.0 - (rect.x + pad_x)).max(0.0)
+        } else {
+            content_width
+        };
+        let subtitle_str =
+            build_simple_attr_string(&headline_clamped, &render.subtitle_font, &render.subtitle_color);
+        subtitle_str.drawInRect(NSRect::new(
+            NSPoint::new(rect.x + pad_x, y_cursor),
+            NSSize::new(subtitle_max_w, 20.0),
+        ));
+        y_cursor += 24.0;
+    } else if focused_mode {
+        y_cursor += 4.0;
     }
 
     if embedded_terminal {
@@ -539,33 +480,6 @@ fn draw_status_chip(
     *y_cursor += chip_h + 4.0;
 }
 
-fn draw_attention_chip(
-    label: &str,
-    fill: usize,
-    x: f64,
-    y_cursor: &mut f64,
-    render: &TerminalRenderState,
-) {
-    let chip_w = label.len() as f64 * 7.0 + 16.0;
-    let chip_h = 20.0;
-    let chip_rect = NSRect::new(
-        NSPoint { x, y: *y_cursor },
-        NSSize {
-            width: chip_w,
-            height: chip_h,
-        },
-    );
-    let chip_path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(chip_rect, 8.0, 8.0);
-    render.attention_chip_bg(fill).setFill();
-    chip_path.fill();
-
-    let chip_str =
-        build_simple_attr_string(label, &render.status_font, &render.attention_chip_text);
-    chip_str.drawAtPoint(NSPoint {
-        x: x + 8.0,
-        y: *y_cursor + 2.0,
-    });
-}
 
 fn draw_nudge_chip(
     label: &str,

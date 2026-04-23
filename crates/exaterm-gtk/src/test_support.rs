@@ -288,6 +288,14 @@ mod imp {
                         &card.headline,
                         Some(card.headline.label().to_string()),
                     ));
+                    nodes.push(widget_node(
+                        &self.root,
+                        &format!("battlefield-card-subtitle-{}", key.slug()),
+                        &selectors::battlefield_card_subtitle(key),
+                        Role::Label,
+                        &card.headline,
+                        Some(card.headline.label().to_string()),
+                    ));
                 }
                 if card.alert.is_visible() {
                     nodes.push(widget_node(
@@ -316,6 +324,16 @@ mod imp {
                         &selectors::battlefield_card_attention_bar(key),
                         Role::Marker,
                         &card.momentum_bar.frame,
+                        Some(card.momentum_bar.reason.label().to_string()),
+                    ));
+                }
+                if card.momentum_bar.reason.is_visible() {
+                    nodes.push(widget_node(
+                        &self.root,
+                        &format!("battlefield-card-attention-bar-reason-{}", key.slug()),
+                        &selectors::battlefield_card_attention_bar_reason(key),
+                        Role::Label,
+                        &card.momentum_bar.reason,
                         Some(card.momentum_bar.reason.label().to_string()),
                     ));
                 }
