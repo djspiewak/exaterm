@@ -158,6 +158,7 @@ mod imp {
                     id: Some(selectors::battlefield_card(key)),
                     role: Some(Role::ListItem),
                     label: Some(card.title.label().to_string()),
+                    ..Default::default()
                 },
             );
         }

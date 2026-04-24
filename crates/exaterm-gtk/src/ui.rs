@@ -1422,8 +1422,22 @@ fn build_battle_card_widgets(
     content.append(&middle_stack);
     content.append(&footer);
 
-    let frame = gtk::Frame::builder()
+    // Transparent overlay used solely to fire connect_resize when the card width changes.
+    // GTK4 removed the size-allocate signal; DrawingArea::resize is the available replacement.
+    let size_sensor = gtk::DrawingArea::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .can_target(false)
+        .build();
+    let card_overlay = gtk::Overlay::builder()
         .child(&content)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    card_overlay.add_overlay(&size_sensor);
+
+    let frame = gtk::Frame::builder()
+        .child(&card_overlay)
         .hexpand(true)
         .vexpand(true)
         .halign(gtk::Align::Fill)
@@ -1458,7 +1472,7 @@ fn build_battle_card_widgets(
         let title_label = title.clone();
         let headline_label = headline.clone();
         let last_width = std::rc::Rc::new(Cell::new(-1i32));
-        frame.connect_size_allocate(move |_, width, _, _| {
+        size_sensor.connect_resize(move |_, width, _| {
             if last_width.get() == width {
                 return;
             }
